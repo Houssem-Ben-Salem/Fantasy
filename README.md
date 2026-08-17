@@ -40,13 +40,16 @@ This is not theoretical. An earlier version threaded a `season` argument into
 functions that called those endpoints regardless, so on any machine where the FPL
 API was reachable, loading 2024-25 wrote **current-season rows stamped with a
 historical season label**. It failed upward — the cross-season crosswalk rose to a
-perfect 1.0 (the current player list matching itself) against a correct 0.806, so
-the corruption made a quality metric look *better*.
+perfect 1.0 (the current player list matching itself) against a correct 0.78-0.81
+depending on path, so the corruption made a quality metric look *better*.
 
 `ingest.check_season_distinctness()` now asserts that different seasons contain
 different data, and `run(strict=True)` refuses to return a corrupted database.
 `tests/test_sources_season_gating.py` simulates a reachable API and fails against
 the old code.
+
+A general lesson worth keeping: any figure in this README produced on one path is
+not automatically true on the other. Where a number differs, both paths are stated.
 
 ### The other design decision that matters
 
@@ -210,10 +213,26 @@ PASS max 3 per club         PASS XI >= 1 FWD
 PASS one captain
 ```
 
-Ingest: 27,605 rows (2024-25) + 29,747 rows (2025-26), 38/38 gameweeks each.
-Cross-season crosswalk: 80.6% of 2026-27 players matched to 2025-26 by stable `code`.
-The unmatched 110 are new signings and promoted-club players — genuinely no history,
-not a join bug.
+Ingest: 27,605 rows (2024-25) + 29,747 rows (2025-26), 38/38 gameweeks each. Those are
+mirror-sourced and path-independent.
+
+**Crosswalk numbers are path-dependent — check yours rather than matching mine.**
+Live `bootstrap-static` carries more current-season players than the mirror's periodic
+`players_raw.csv` snapshot (the mirror set is a strict subset), so the denominator
+differs and the match rate moves with it:
+
+| path | current players | matched to 2025-26 | rate |
+|---|---|---|---|
+| mirror only (`FPLBRAIN_ALLOW_LIVE=0`) | 567 | 457 | 0.806 |
+| live current season (default) | 590 | 460 | 0.780 |
+
+Both are correct. The live figure is the fresher one and the one to prefer — the extra
+players are registrations made since the mirror snapshot, which in August is exactly
+where new signings live. A *lower* rate here is the healthier number.
+
+The invariant that does hold on every path: unmatched players are new signings and
+promoted-club players with genuinely no history, **not** a join failure. If the rate
+ever hits 1.0, that is not success — see the season-gating section below.
 
 ## Known data-quality issues
 

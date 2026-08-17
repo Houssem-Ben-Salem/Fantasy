@@ -1,37 +1,84 @@
 name: refresh-fpl-data
 
-# Runs every day at 06:00 UTC, and twice on Friday (deadline day for most GWs).
-# GitHub-hosted runners can reach fantasy.premierleague.com, so this gets you
-# live data even if your local agent sandbox cannot.
+# GitHub-hosted runners CAN reach fantasy.premierleague.com, unlike most agent
+# sandboxes. So this workflow exercises the LIVE path for the current season
+# while history still comes from the mirror (see sources._is_current).
+#
+# That difference matters: live bootstrap-static carries more players than the
+# mirror's periodic snapshot, so this job produces the fresher projections.
+
 on:
   schedule:
-    - cron: "0 6 * * *"
-    - cron: "0 10 * * 5"
+    - cron: "0 6 * * *"      # daily
+    - cron: "0 10 * * 5"     # again Friday, deadline day for most gameweeks
   workflow_dispatch:
+
+permissions:
+  contents: write            # required for the commit step below
+
+concurrency:
+  group: refresh-fpl-data
+  cancel-in-progress: false
 
 jobs:
   refresh:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
+
       - run: pip install -r requirements.txt
+
+      - name: Connectivity probe
+        run: python -m fplbrain.sources
+
       - name: Refresh database and projections
+        env:
+          FPLBRAIN_SEASON: "2026-27"
         run: python scripts/refresh.py --db data/fpl.db --horizon 8
+
+      - name: Run tests
+        run: python -m pytest tests/ -q
+
+      # Export projections as CSV. This is the artefact worth versioning:
+      # ~650 KB of text that diffs sensibly, versus a 12 MB binary SQLite file
+      # that would add roughly 3 GB to the repo over a season of daily runs and
+      # that git cannot delta-compress. The DB rebuilds in 30s from `make ingest`.
+      - name: Export projections
+        run: |
+          mkdir -p exports
+          python - <<'PY'
+          import sqlite3, pandas as pd
+          c = sqlite3.connect("data/fpl.db")
+          pd.read_sql("SELECT * FROM v_latest_projections", c).to_csv(
+              "exports/projections_latest.csv", index=False)
+          pd.read_sql(
+              "SELECT run_id, created_at, horizon_start, horizon_end, provenance "
+              "FROM runs ORDER BY created_at DESC LIMIT 20", c
+          ).to_csv("exports/runs_recent.csv", index=False)
+          PY
+
+      # The database goes to artifacts, not git.
       - name: Upload database artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fpl-db
+          name: fpl-db-${{ github.run_number }}
           path: data/fpl.db
-          retention-days: 30
-      - name: Commit refreshed projections
+          retention-days: 14
+
+      - name: Commit projections
         run: |
           git config user.name "fplbrain-bot"
-          git config user.email "actions@github.com"
-          git add -f data/fpl.db
-          git diff --staged --quiet || git commit -m "refresh: $(date -u +%F)"
-          git push
-        continue-on-error: true
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add exports/
+          if git diff --staged --quiet; then
+            echo "no projection changes"
+          else
+            git commit -m "refresh projections: $(date -u +%F)"
+            git push
+          fi
