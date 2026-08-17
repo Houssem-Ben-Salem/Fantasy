@@ -65,6 +65,14 @@ I'm an ML engineer. Talk to me at that level. No preamble, no restating my quest
 Prefer `run_sql` over asking me for data. The database has three seasons of
 gameweek-level rows including tackles, recoveries, CBI, and defensive_contribution.
 
+**Player names can be ambiguous, and the tools will refuse rather than guess.**
+Two players are named `Palmer` in 2026/27 (Cole Palmer, CHE MID, and a GK at
+Ipswich). If a tool returns "ambiguous", it lists every candidate with its
+element id — re-call with the id, e.g. `154` instead of `Palmer`. Element ids
+are the unambiguous channel: use them in `plan_transfers`, `chip_advice`, and
+`save_state` whenever a name is not unique. Do not retry the same name hoping
+for a different result, and never assume which player was meant.
+
 ## Weekly workflow
 
 Run this whenever I say "weekly check-in" or name a gameweek.

@@ -87,6 +87,103 @@ def _next_gw() -> int:
     return int(row["g"]) if pd.notna(row["g"]) else 1
 
 
+# ------------------------------------------------------------------ name lookup
+#
+# Every tool that takes player names resolves them HERE, and nowhere else.
+#
+# The original pattern — `web_name.str.contains(nm)` then `.iloc[0]` — fails
+# silently in three separate ways, and all three are live in the 2026-27 data:
+#
+#   1. AMBIGUITY. Two players are named `Palmer` (Cole Palmer, CHE MID £9.5m,
+#      and a GK at Ipswich, £4.0m). `.iloc[0]` picks one without saying which,
+#      so plan_transfers would optimise around the wrong player and return a
+#      perfectly plausible squad. There is no signal that anything went wrong.
+#   2. SUBSTRING OVERREACH. `Raya` also matches `Rayan` (BOU). Exact matches
+#      must therefore win over substring, or a correct full name stays
+#      ambiguous forever.
+#   3. SILENT DROPS. build_squad and chip_advice appended only when a match was
+#      found, so a typo removed a player from the list. A 14-player squad
+#      handed to the optimiser either fails as infeasible or, worse, solves.
+#
+# Raising with the candidates listed — not just a count — lets an agent fix the
+# call on its next attempt instead of guessing again.
+
+
+class PlayerLookupError(ValueError):
+    """A query did not resolve to exactly one player."""
+
+
+def _describe(rows: pd.DataFrame) -> str:
+    return "; ".join(
+        f"{r.web_name} ({r.team}, {r.position}, £{r.now_cost}m, id={int(r.element)})"
+        for r in rows.drop_duplicates("element").itertuples())
+
+
+def _resolve_player(proj: pd.DataFrame, query: str) -> int:
+    """Resolve one query to a single element id, or raise with the candidates."""
+    q = str(query).strip()
+    if not q:
+        raise PlayerLookupError("empty player name")
+
+    pool = proj.drop_duplicates("element")
+
+    # A bare number is an element id — an unambiguous channel that bypasses
+    # name matching entirely. Use it for save_state and for anything scripted.
+    if q.isdigit():
+        hit = pool[pool.element == int(q)]
+        if hit.empty:
+            raise PlayerLookupError(f"no player with element id {q}")
+        return int(hit.iloc[0].element)
+
+    # regex=False matters: names contain regex metacharacters ("B.Fernandes"),
+    # where an unescaped '.' would match any character.
+    exact = pool[pool.web_name.str.lower() == q.lower()]
+    if len(exact) == 1:
+        return int(exact.iloc[0].element)
+    if len(exact) > 1:
+        raise PlayerLookupError(
+            f"'{q}' is ambiguous — {len(exact)} players share that exact name: "
+            f"{_describe(exact)}. Pass the element id to disambiguate.")
+
+    part = pool[pool.web_name.str.contains(q, case=False, na=False, regex=False)]
+    if part.empty:
+        raise PlayerLookupError(f"no player matching '{q}'")
+    if len(part) > 1:
+        raise PlayerLookupError(
+            f"'{q}' is ambiguous — {len(part)} matches: {_describe(part)}. "
+            f"Use the exact web_name or the element id.")
+    return int(part.iloc[0].element)
+
+
+def _resolve_players(proj: pd.DataFrame, names: str, expect: int | None = None) -> list[int]:
+    """Resolve a comma-separated list. Reports EVERY problem, not just the first."""
+    queries = [x.strip() for x in str(names).split(",") if x.strip()]
+    if not queries:
+        raise PlayerLookupError("no player names supplied")
+
+    ids, problems = [], []
+    for q in queries:
+        try:
+            ids.append(_resolve_player(proj, q))
+        except PlayerLookupError as e:
+            problems.append(str(e))
+    if problems:
+        raise PlayerLookupError(
+            f"{len(problems)} of {len(queries)} names did not resolve:\n  - "
+            + "\n  - ".join(problems))
+
+    # The same player named twice is another route to a short squad.
+    dupes = sorted({i for i in ids if ids.count(i) > 1})
+    if dupes:
+        named = _describe(proj[proj.element.isin(dupes)])
+        raise PlayerLookupError(f"the same player was listed more than once: {named}")
+
+    if expect is not None and len(ids) != expect:
+        raise PlayerLookupError(
+            f"expected {expect} players, got {len(ids)} — check the list is complete")
+    return ids
+
+
 # ------------------------------------------------------------------ tools
 
 
@@ -233,10 +330,11 @@ def player_detail(name: str, n_gw: int = 6) -> str:
     """Deep dive on one player: projections, history, DefCon rate, set-piece duties."""
     gw = _next_gw()
     proj = _projections(gw, n_gw)
-    match = proj[proj.web_name.str.contains(name, case=False, na=False)]
-    if match.empty:
-        return f"No player matching '{name}'."
-    element = int(match.iloc[0].element)
+    try:
+        element = _resolve_player(proj, name)
+    except PlayerLookupError as e:
+        return f"**Could not resolve '{name}'.**\n{e}"
+    match = proj[proj.element == element]
     rows = match[match.element == element][
         ["gw", "exp_points", "p_start", "p_clean_sheet", "p_defcon",
          "exp_goals", "exp_assists", "exp_bonus", "n_fixtures"]]
@@ -281,17 +379,15 @@ def build_squad(budget: float = 100.0, gw_start: int = 0, n_gw: int = 6,
     proj = _projections(gw_start, n_gw)
     horizon = list(range(gw_start, gw_start + n_gw))
 
-    def resolve(names: str) -> list[int]:
-        out = []
-        for nm in [x.strip() for x in names.split(",") if x.strip()]:
-            m = proj[proj.web_name.str.contains(nm, case=False, na=False)]
-            if not m.empty:
-                out.append(int(m.iloc[0].element))
-        return out
+    try:
+        locked = _resolve_players(proj, locked_players) if locked_players.strip() else []
+        banned = _resolve_players(proj, banned_players) if banned_players.strip() else []
+    except PlayerLookupError as e:
+        return f"**Could not resolve player names.**\n{e}"
 
     res = optimize.initial_squad(
         proj, horizon=horizon, budget=budget, bench_weight=bench_weight,
-        locked=resolve(locked_players), banned=resolve(banned_players))
+        locked=locked, banned=banned)
 
     s = res.squad[["web_name", "position", "team", "now_cost", "horizon_xp",
                    "mean_p_start", "in_xi", "is_captain"]]
@@ -313,15 +409,12 @@ def plan_transfers(squad_names: str, bank: float = 0.0, free_transfers: int = 1,
     """
     gw = _next_gw()
     proj = _projections(gw, n_gw)
-    ids, unresolved = [], []
-    for nm in [x.strip() for x in squad_names.split(",") if x.strip()]:
-        m = proj[proj.web_name.str.contains(nm, case=False, na=False)]
-        if m.empty:
-            unresolved.append(nm)
-        else:
-            ids.append(int(m.iloc[0].element))
-    if unresolved:
-        return f"Could not resolve: {unresolved}. Use exact FPL web names."
+    # expect=15: a squad short by one silently changes the problem the solver
+    # is given, and it will happily return an answer for the wrong squad.
+    try:
+        ids = _resolve_players(proj, squad_names, expect=15)
+    except PlayerLookupError as e:
+        return f"**Could not resolve your squad.**\n{e}"
 
     res = optimize.transfer_plan(
         proj, ids, horizon=list(range(gw, gw + n_gw)), bank=bank,
@@ -347,11 +440,13 @@ def chip_advice(squad_names: str, gw: int = 0) -> str:
     """Quantify Bench Boost / Triple Captain / Free Hit value for a gameweek."""
     gw = gw or _next_gw()
     proj = _projections(gw, 6)
-    ids = []
-    for nm in [x.strip() for x in squad_names.split(",") if x.strip()]:
-        m = proj[proj.web_name.str.contains(nm, case=False, na=False)]
-        if not m.empty:
-            ids.append(int(m.iloc[0].element))
+    # Bench Boost value is a sum over the squad, so a dropped name understates
+    # the chip rather than failing — silently, and in the direction of not
+    # playing it. expect=15 makes that impossible.
+    try:
+        ids = _resolve_players(proj, squad_names, expect=15)
+    except PlayerLookupError as e:
+        return f"**Could not resolve your squad.**\n{e}"
     ev = optimize.evaluate_chips(proj, ids, gw)
     return json.dumps(ev, indent=2, default=str)
 

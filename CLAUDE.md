@@ -204,6 +204,14 @@ Rules any new tool must follow:
 2. Every tool caps its own row count; `_md()` is honest about truncation.
 3. `run_sql` is SELECT/WITH-only with a keyword blocklist and an injected LIMIT.
 4. Return provenance where relevant so the agent can state how stale an answer is.
+5. **Resolve player names only through `_resolve_player` / `_resolve_players`.** Never
+   reintroduce `web_name.str.contains(...).iloc[0]`: two players are named `Palmer` in
+   2026-27, so that pattern picks one silently and returns a plausible squad optimised
+   around the wrong player. The helper makes exact matches beat substrings (`Raya` vs
+   `Rayan`), accepts a bare number as an element id, raises with every candidate listed
+   rather than a count, reports *all* bad names in a list instead of the first, rejects
+   duplicates, and takes `expect=15` so a dropped name can't hand the solver a short
+   squad. Guarded by `tests/test_player_lookup.py`.
 
 Projections are cached in-process in `_PROJ`, keyed on `(start_gw, n_gw)`;
 `refresh_data()` invalidates it. **`refresh_data()` must ingest *and* project *and*
