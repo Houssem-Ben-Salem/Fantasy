@@ -1,0 +1,37 @@
+name: refresh-fpl-data
+
+# Runs every day at 06:00 UTC, and twice on Friday (deadline day for most GWs).
+# GitHub-hosted runners can reach fantasy.premierleague.com, so this gets you
+# live data even if your local agent sandbox cannot.
+on:
+  schedule:
+    - cron: "0 6 * * *"
+    - cron: "0 10 * * 5"
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Refresh database and projections
+        run: python scripts/refresh.py --db data/fpl.db --horizon 8
+      - name: Upload database artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fpl-db
+          path: data/fpl.db
+          retention-days: 30
+      - name: Commit refreshed projections
+        run: |
+          git config user.name "fplbrain-bot"
+          git config user.email "actions@github.com"
+          git add -f data/fpl.db
+          git diff --staged --quiet || git commit -m "refresh: $(date -u +%F)"
+          git push
+        continue-on-error: true
