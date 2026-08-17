@@ -159,6 +159,17 @@ def test_refresh_data_leaves_the_view_populated(monkeypatch, tmp_path):
     Network and model fitting are stubbed: this asserts the ORCHESTRATION —
     that refresh_data() persists a projection run and leaves the view readable —
     not the model's numbers, which tests/test_constraints.py covers.
+
+    SCOPE — DO NOT TREAT THIS AS COVERING THE VIEW SQL.
+    This test covers ONLY the refresh_data() half of the fix. It passes against
+    the OLD, broken view SQL, because once refresh_data() persists correctly the
+    projection run is newest and even the buggy
+        (SELECT run_id FROM runs ORDER BY created_at DESC LIMIT 1)
+    resolves to it. The view fix has its own tests above —
+    test_ingest_run_after_projection_does_not_empty_the_view and
+    test_view_survives_an_ingest_between_two_projection_runs — which are the two
+    that fail when the view SQL is reverted. Deleting either of those because
+    "this test covers it" would silently reopen the original bug.
     """
     from fplbrain import mcp_server
 

@@ -363,6 +363,62 @@ def check_season_distinctness(conn: sqlite3.Connection, seasons: list[str]) -> d
     return report
 
 
+# Columns a season may legitimately lack ENTIRELY, with the reason to report
+# when that is the case. The reason is explanatory text only — which case
+# applies is derived from the data, never from a hardcoded season, so a future
+# season introducing a new stat classifies correctly with no code change.
+OPTIONAL_COLUMNS = {
+    "tackles": "DefCon inputs were not collected before 2025-26",
+    "recoveries": "DefCon inputs were not collected before 2025-26",
+    "clearances_blocks_interceptions": "DefCon inputs were not collected before 2025-26",
+    "defensive_contribution": "the DefCon scoring rule was introduced in 2025-26",
+}
+
+
+def _column_availability(conn: sqlite3.Connection, season: str,
+                         total_rows: int) -> tuple[dict, dict]:
+    """
+    Classify each optional column into absent-by-design vs actually broken.
+
+    Three cases, distinguished against the season's row count:
+
+      0 nulls              fully available — report nothing
+      nulls == total       ABSENT BY DESIGN — the stat did not exist that
+                           season. Belongs under data_availability, not
+                           anomalies: it is a correct observation, and filing it
+                           as an anomaly means the agent opens every session by
+                           reporting a data integrity problem on correct data.
+                           27,605 nulls for 2024-25 is the expected reading.
+      0 < nulls < total    A REAL ANOMALY. A stat that exists for part of a
+                           season and not the rest is a broken or truncated
+                           load, which is exactly the case the blanket null
+                           count used to hide.
+
+    Returns (data_availability, partial_anomalies).
+    """
+    availability: dict = {}
+    partial: dict = {}
+    if not total_rows:
+        return availability, partial
+
+    for col, reason in OPTIONAL_COLUMNS.items():
+        nulls = int(pd.read_sql(
+            f"SELECT COUNT(*) n FROM player_gw WHERE season = ? AND {col} IS NULL",
+            conn, params=(season,)).iloc[0]["n"])
+        if nulls == 0:
+            continue
+        if nulls == total_rows:
+            availability[col] = f"not collected in {season} — {reason}"
+        else:
+            partial[f"partial_null_{col}"] = {
+                "nulls": nulls,
+                "pct": round(100.0 * nulls / total_rows, 1),
+                "note": ("partial coverage — expected either 0% or 100%; "
+                         "this suggests a truncated or broken load"),
+            }
+    return availability, partial
+
+
 def validate(conn: sqlite3.Connection, season: str) -> dict:
     """Return a report the agent must surface before trusting anything downstream."""
     q = lambda s, p=(): pd.read_sql(s, conn, params=p)  # noqa: E731
@@ -387,12 +443,19 @@ def validate(conn: sqlite3.Connection, season: str) -> dict:
         """SELECT
              SUM(CASE WHEN minutes < 0 OR minutes > 120 THEN 1 ELSE 0 END) bad_minutes,
              SUM(CASE WHEN total_points < -10 OR total_points > 40 THEN 1 ELSE 0 END) bad_points,
-             SUM(CASE WHEN goals_scored < 0 OR goals_scored > 6 THEN 1 ELSE 0 END) bad_goals,
-             SUM(CASE WHEN defensive_contribution IS NULL THEN 1 ELSE 0 END) null_defcon
+             SUM(CASE WHEN goals_scored < 0 OR goals_scored > 6 THEN 1 ELSE 0 END) bad_goals
            FROM player_gw WHERE season = ?""",
         (season,),
     ).iloc[0]
-    report["anomalies"] = {k: (int(v) if pd.notna(v) else None) for k, v in bad.items()}
+    anomalies: dict = {k: (int(v) if pd.notna(v) else 0) for k, v in bad.items()}
+
+    availability, partial = _column_availability(conn, season, report["rows"])
+    anomalies.update(partial)
+
+    report["anomalies"] = anomalies
+    report["anomalies_ok"] = not any(
+        (v.get("nulls", 0) if isinstance(v, dict) else v) for v in anomalies.values())
+    report["data_availability"] = availability
 
     report["source_duplicate_rows_removed"] = _DUPES.get(season, 0)
 

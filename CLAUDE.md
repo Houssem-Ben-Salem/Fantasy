@@ -123,7 +123,12 @@ These are documented in module docstrings; the same three recur across `models.p
    `clearances_blocks_interceptions` are 100% NULL for all of 2024-25 (the DefCon rule
    didn't exist). Pooling that season with `fillna(0)` halves every DefCon estimate.
    `defcon_model()` filters on `defensive_contribution IS NOT NULL` rather than trusting
-   the caller's season list — keep that filter.
+   the caller's season list — keep that filter. `validate()` reports this absence under
+   `data_availability`, **not** `anomalies`: a column that is 100% null is absent by
+   design, and filing it as a fault made the agent open every session reporting corrupt
+   data on correct data. Partial nulls (`0 < nulls < total`) *are* an anomaly — that
+   means a truncated load. The case is derived from the null count against the row count,
+   never from a hardcoded season, so a new stat in a future season classifies itself.
 2. **`defensive_contribution` is an action count, not points.** It is already the
    position-correct metric (CBIT for DEF, CBIRT for MID/FWD). Threshold it at
    `models.DEFCON_THRESHOLD` (10 DEF / 12 MID / 12 FWD); a non-zero value does not mean

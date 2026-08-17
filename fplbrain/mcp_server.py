@@ -137,11 +137,33 @@ def refresh_data(n_gw: int = 6) -> str:
 
     val = result["validation"]
     lines = ["Data refreshed.", ""]
+    notes: list[str] = []
     for season, r in val.items():
+        # Distinguish "nothing is wrong" from "a stat is absent by design".
+        # Printing a dict of zeros, or a 27,605 null count filed as an anomaly,
+        # invites the agent to open every session reporting a fault on correct
+        # data — which trains the user to ignore the check.
+        if r.get("anomalies_ok", True):
+            health = "no anomalies"
+        else:
+            bad = {k: v for k, v in r["anomalies"].items()
+                   if (v.get("nulls", 0) if isinstance(v, dict) else v)}
+            health = f"**ANOMALIES**: {bad}"
         lines.append(
             f"- **{season}**: {r['rows']} rows, {r['n_gameweeks']}/38 GWs, "
-            f"{r.get('source_duplicate_rows_removed', 0)} dupes removed, "
-            f"anomalies={r['anomalies']}")
+            f"{r.get('source_duplicate_rows_removed', 0)} dupes removed, {health}")
+        # Collapse columns that share a reason — four lines saying the same
+        # thing is noise at the top of every session. The reason text already
+        # names the season.
+        by_reason: dict[str, list[str]] = {}
+        for col, reason in r.get("data_availability", {}).items():
+            by_reason.setdefault(reason, []).append(col)
+        for reason, cols in by_reason.items():
+            notes.append(f"  - {', '.join(f'`{c}`' for c in cols)}: {reason}")
+    if notes:
+        lines.append("")
+        lines.append("_Expected data gaps (informational, not errors):_")
+        lines.extend(notes)
     lines.append("")
     lines.append(
         f"**projections**: run_id `{run_id}`, {int(persisted['n'])} rows across "
