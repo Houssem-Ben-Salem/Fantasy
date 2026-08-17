@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -110,11 +111,30 @@ def status() -> str:
 
 
 @mcp.tool()
-def refresh_data() -> str:
-    """Re-pull all sources and rebuild the database. Run before each gameweek."""
+def refresh_data(n_gw: int = 6) -> str:
+    """Re-pull all sources, rebuild the database, and persist fresh projections."""
     from . import ingest
+
+    t0 = time.time()
     result = ingest.run(DB, SEASON, HIST)
+
+    # Ingest alone is NOT a refresh. It rebuilds the fact tables and appends an
+    # `ingest-*` row to `runs`, leaving the newest run one with no projections.
+    # Persisted projections are then stale (or absent on a first run) while the
+    # in-process _PROJ cache is fresh — two sources of truth that disagree, and
+    # v_latest_projections resolves against the stale one. Project and persist
+    # here, exactly as scripts/refresh.py does.
+    start_gw = _next_gw()
+    with _conn() as c:
+        proj, diag = models.project_horizon(c, SEASON, start_gw, n_gw, HIST)
+        run_id = models.persist_projections(c, proj, SEASON, diag)
+        persisted = pd.read_sql(
+            "SELECT COUNT(*) n, COUNT(DISTINCT gw) gws FROM projections WHERE run_id=?",
+            c, params=(run_id,)).iloc[0]
+
     _PROJ["df"] = None
+    elapsed = time.time() - t0
+
     val = result["validation"]
     lines = ["Data refreshed.", ""]
     for season, r in val.items():
@@ -123,8 +143,13 @@ def refresh_data() -> str:
             f"{r.get('source_duplicate_rows_removed', 0)} dupes removed, "
             f"anomalies={r['anomalies']}")
     lines.append("")
+    lines.append(
+        f"**projections**: run_id `{run_id}`, {int(persisted['n'])} rows across "
+        f"{int(persisted['gws'])} gameweeks (GW{start_gw}-{start_gw + n_gw - 1})")
     lines.append(f"crosswalk match rates: " + ", ".join(
         f"{k}={v.get('match_rate')}" for k, v in result["crosswalks"].items()))
+    lines.append(f"integrity: distinctness ok={result['distinctness']['ok']}")
+    lines.append(f"elapsed: {elapsed:.1f}s")
     lines.append(f"source paths: {json.dumps(result['provenance'], default=str)[:600]}")
     return "\n".join(lines)
 

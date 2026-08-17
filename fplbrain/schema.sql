@@ -246,6 +246,20 @@ SELECT season, element, code, gw, total_points, minutes,
 FROM player_gw;
 
 -- Latest projections joined to prices — the agent's main working table.
+--
+-- DO NOT "simplify" the run_id subquery back to
+--     (SELECT run_id FROM runs ORDER BY created_at DESC LIMIT 1)
+-- The `runs` table holds rows from BOTH ingest and projection runs. An ingest
+-- run has no projection rows, so if it happens to be newest this view silently
+-- goes empty. That is not hypothetical: mcp_server.refresh_data() calls
+-- ingest.run() and nothing else, and AGENT.md tells the agent to call it at the
+-- start of every session. Measured: 3,540 rows before the call, 0 after, while
+-- 8,260 projection rows sat in the table unreachable.
+--
+-- Deriving the run from `projections` means the view can only ever resolve to a
+-- run that actually has projection rows. We join rather than filter on
+-- notes='projection' because that label is a string set in one place in
+-- models.persist_projections() and can drift; the join cannot.
 DROP VIEW IF EXISTS v_latest_projections;
 CREATE VIEW v_latest_projections AS
 SELECT
@@ -258,4 +272,10 @@ SELECT
 FROM projections pr
 JOIN players p ON p.season = pr.season AND p.element = pr.element
 LEFT JOIN teams t ON t.season = pr.season AND t.team_id = p.team_id
-WHERE pr.run_id = (SELECT run_id FROM runs ORDER BY created_at DESC LIMIT 1);
+WHERE pr.run_id = (
+    SELECT p2.run_id
+    FROM projections p2
+    JOIN runs r2 ON r2.run_id = p2.run_id
+    ORDER BY r2.created_at DESC
+    LIMIT 1
+);

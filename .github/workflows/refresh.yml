@@ -24,6 +24,13 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+
+    # Single source of truth for both the refresh and the export assertion that
+    # checks the exported CSV actually covers the horizon it asked for.
+    env:
+      FPLBRAIN_SEASON: "2026-27"
+      FPL_HORIZON: "8"
+
     steps:
       - uses: actions/checkout@v4
 
@@ -38,29 +45,57 @@ jobs:
         run: python -m fplbrain.sources
 
       - name: Refresh database and projections
-        env:
-          FPLBRAIN_SEASON: "2026-27"
-        run: python scripts/refresh.py --db data/fpl.db --horizon 8
+        run: python scripts/refresh.py --db data/fpl.db --horizon "$FPL_HORIZON"
 
       - name: Run tests
         run: python -m pytest tests/ -q
 
       # Export projections as CSV. This is the artefact worth versioning:
-      # ~650 KB of text that diffs sensibly, versus a 12 MB binary SQLite file
+      # ~900 KB of text that diffs sensibly, versus a 12 MB binary SQLite file
       # that would add roughly 3 GB to the repo over a season of daily runs and
       # that git cannot delta-compress. The DB rebuilds in 30s from `make ingest`.
+      #
+      # The assertions matter more than they look. v_latest_projections can
+      # resolve to nothing if the newest `runs` row has no projections; without
+      # a guard this step would write a header-only CSV, the commit step would
+      # report "no projection changes", and the job would go green having
+      # published nothing.
       - name: Export projections
         run: |
           mkdir -p exports
           python - <<'PY'
-          import sqlite3, pandas as pd
+          import os, sqlite3, sys
+          import pandas as pd
+
+          def fail(msg: str) -> None:
+              print(f"::error::export assertion failed: {msg}", file=sys.stderr)
+              sys.exit(1)
+
+          expected_gws = int(os.environ["FPL_HORIZON"])
           c = sqlite3.connect("data/fpl.db")
-          pd.read_sql("SELECT * FROM v_latest_projections", c).to_csv(
-              "exports/projections_latest.csv", index=False)
+          df = pd.read_sql("SELECT * FROM v_latest_projections", c)
+
+          if df.empty:
+              fail("v_latest_projections returned 0 rows — the newest run in "
+                   "`runs` probably has no projection rows, so the view resolved "
+                   "to nothing. Refusing to publish a header-only CSV.")
+
+          n_gws = df["gw"].nunique()
+          if n_gws != expected_gws:
+              fail(f"expected {expected_gws} distinct gameweeks (FPL_HORIZON), "
+                   f"got {n_gws}: {sorted(int(g) for g in df['gw'].unique())}")
+
+          if df["exp_points"].isna().all():
+              fail("exp_points is entirely null")
+          if (df["exp_points"].fillna(0) == 0).all():
+              fail("exp_points is entirely zero — the model produced no signal")
+
+          df.to_csv("exports/projections_latest.csv", index=False)
           pd.read_sql(
               "SELECT run_id, created_at, horizon_start, horizon_end, provenance "
               "FROM runs ORDER BY created_at DESC LIMIT 20", c
           ).to_csv("exports/runs_recent.csv", index=False)
+          print(f"exported {len(df)} rows across {n_gws} gameweeks")
           PY
 
       # The database goes to artifacts, not git.

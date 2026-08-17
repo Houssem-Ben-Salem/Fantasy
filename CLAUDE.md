@@ -104,9 +104,15 @@ views (`v_season_totals`, `v_defcon_rate`, `v_form6`, `v_latest_projections`).
   EXISTS` and must never be dropped: `squad_state` is user data, and `projections`
   accumulates across the season so you can audit the model for drift. `init_schema()`
   runs on every ingest, so moving a table across that line silently destroys data.
-- `v_latest_projections` filters on the newest row in `runs` by `created_at`, but
-  `runs` holds both `ingest-*` and `proj-*` rows. After a bare ingest the newest run is
-  an ingest run and the view returns nothing until projections are persisted.
+- `v_latest_projections` resolves its run by joining **through `projections`**, so it can
+  only ever land on a run that actually has projection rows. Do not "simplify" it back to
+  `(SELECT run_id FROM runs ORDER BY created_at DESC LIMIT 1)`: `runs` holds both
+  `ingest-*` and `proj-*` rows, and an ingest run has no projections, so that form
+  silently empties the view whenever an ingest lands last — which was every call to
+  `refresh_data()`. Measured 3,540 rows → 0. The join is also deliberately not a filter
+  on `notes='projection'`, because that label is a string set in one place and can drift.
+  Costs ~285 ms against 1.29M projection rows (a simulated season of daily runs), so the
+  subquery is not worth optimising. `tests/test_projection_freshness.py` guards all of it.
 
 ## Data traps encoded in the code — don't "fix" them
 
@@ -183,7 +189,10 @@ Rules any new tool must follow:
 4. Return provenance where relevant so the agent can state how stale an answer is.
 
 Projections are cached in-process in `_PROJ`, keyed on `(start_gw, n_gw)`;
-`refresh_data()` invalidates it. The server imports `FastMCP`/`MCPServer` under both SDK
+`refresh_data()` invalidates it. **`refresh_data()` must ingest *and* project *and*
+persist** — ingest alone leaves persisted projections stale while `_PROJ` is fresh, so
+the view-backed tools (`run_sql`) and the in-process tools (`top_players`) disagree, and
+only the former looks broken. It takes ~23s, which is acceptable interactively. The server imports `FastMCP`/`MCPServer` under both SDK
 1.x and 2.0 names — preserve that try/except when touching the import.
 
 ## Agent contract
