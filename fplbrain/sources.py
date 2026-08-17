@@ -316,14 +316,21 @@ def probe_connectivity() -> dict:
         "club_elo": "http://api.clubelo.com/2026-08-16",
         "understat": "https://understat.com/league/EPL",
     }
+    # Nothing in the pipeline consumes Club Elo or Understat — fit_goal_model()
+    # uses its own fitted attack/defence ratings, and load_teams() writes
+    # elo = NaN. They are probed because they would be useful if reachable, so
+    # mark them: a red line here is not a failure, and without the marker it
+    # reads as one to anyone who wasn't around when this was written.
+    OPTIONAL = {"club_elo", "understat"}
     out = {}
     for name, url in targets.items():
+        role = "optional" if name in OPTIONAL else "required"
         try:
             r = requests.get(url, headers=HEADERS, timeout=12, stream=True)
-            out[name] = {"ok": r.status_code == 200, "status": r.status_code}
+            out[name] = {"ok": r.status_code == 200, "status": r.status_code, "role": role}
             r.close()
         except Exception as e:  # noqa: BLE001
-            out[name] = {"ok": False, "error": type(e).__name__}
+            out[name] = {"ok": False, "error": type(e).__name__, "role": role}
     return out
 
 

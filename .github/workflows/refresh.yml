@@ -210,16 +210,29 @@ jobs:
           path: data/fpl.db
           retention-days: 14
 
-      # Commit on the Friday deadline run and manual dispatches only. The daily
-      # runs still refresh, test, and upload the artifact; they just don't
-      # version their output. ~900 KB committed daily across 266 runs is real
-      # volume for state nobody acts on — the Friday run is the one that
-      # actually informs a deadline decision, so that is the history worth
-      # keeping. Note Friday has two runs (06:00 daily, 10:00 deadline); only
-      # the 10:00 one matches here.
+      # INTENTIONAL GATE. A non-Friday run producing NO COMMIT is EXPECTED, not
+      # a bug — if you are reading a green run that says "skipping commit by
+      # design", that is this working. Do not "fix" it by restoring a daily
+      # commit: ~900 KB versioned every day across 266 runs a season is real
+      # volume for state nobody acts on. The Friday deadline run is the one that
+      # informs a decision, so that is the history worth keeping. Daily runs
+      # still refresh, test, and upload the DB artifact (14-day retention),
+      # which covers any midweek investigation.
+      #
+      # Gated on the UTC weekday rather than on
+      #     if: github.event.schedule == '0 10 * * 5'
+      # deliberately. That form couples the gate to a cron string defined
+      # elsewhere in this file, so renumbering the schedule would silently stop
+      # the commit — a green job publishing nothing, which is the failure mode
+      # this pipeline has already produced twice. The weekday check is local to
+      # the thing it guards and cannot drift out of sync.
       - name: Commit projections
-        if: github.event.schedule == '0 10 * * 5' || github.event_name == 'workflow_dispatch'
         run: |
+          if [ "$(date -u +%u)" != "5" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            echo "$(date -u +%F) is not Friday (UTC) and this is not a manual dispatch"
+            echo "skipping commit by design — see the comment above this step"
+            exit 0
+          fi
           git config user.name "fplbrain-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add exports/
