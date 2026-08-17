@@ -58,7 +58,7 @@ mcp_server.py  12 tools; imports models + optimize, never sources directly
 
 `scripts/refresh.py` is the orchestrator (ingest → project → persist → exit code).
 
-`.github/workflows/refresh.yml` runs it daily plus Friday deadline day. **CI is the only
+`.github/workflows/refresh-fpl-data.yml` runs it daily plus Friday deadline day. **CI is the only
 place the live path routinely executes** — GitHub runners can reach
 `fantasy.premierleague.com` while most agent sandboxes get a 403, so a number produced
 locally on the mirror is not automatically the number CI produces (current-season player
