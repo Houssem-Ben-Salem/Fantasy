@@ -63,9 +63,21 @@ place the live path routinely executes** — GitHub runners can reach
 `fantasy.premierleague.com` while most agent sandboxes get a 403, so a number produced
 locally on the mirror is not automatically the number CI produces (current-season player
 counts and the crosswalk rate both differ; see the README table). The workflow commits
-`exports/*.csv` only — the SQLite file goes to an artifact, never to git, because it is
+`exports/` only — the SQLite file goes to an artifact, never to git, because it is
 12 MB of binary that git cannot delta-compress and it rebuilds in ~30s from `make
-ingest`. Don't reintroduce a `git add data/fpl.db`.
+ingest`. Don't reintroduce a `git add data/fpl.db`. The commit step is gated to the
+Friday deadline run and manual dispatches; daily runs still refresh, test, and upload
+the artifact, they just don't version output nobody acts on.
+
+**A mirror fallback in CI is annotated, never fatal.** The probe step warns and writes
+the resolved path to `$GITHUB_STEP_SUMMARY` when `fpl_api.ok` is false, but only fails
+when the *mirror* is also unreachable — at that point there is no source at all. Failing
+on a 403 would cost fresh projections on a deadline Friday over a provenance question.
+Because the path moves the headline numbers, every export carries
+`exports/run_metadata.json` with `resolved_path`, player count, crosswalk rate, and
+source path per season, and `status()` reports the same to the agent — so a number that
+moves between runs explains itself from the artefact rather than from a CI log that may
+have aged out.
 
 ### The fallback chain (`sources.py`)
 

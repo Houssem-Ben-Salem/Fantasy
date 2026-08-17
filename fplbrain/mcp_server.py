@@ -103,9 +103,33 @@ def status() -> str:
         nxt = pd.read_sql(
             """SELECT MIN(gw) gw, MIN(kickoff_time) ko FROM fixtures
                WHERE season=? AND finished=0 AND gw IS NOT NULL""", c, params=(SEASON,)).iloc[0]
+        prov_row = pd.read_sql(
+            "SELECT provenance FROM runs WHERE notes='ingest' "
+            "ORDER BY created_at DESC LIMIT 1", c)
+
+    # Which path the data came from moves the headline numbers, so say it out
+    # loud rather than letting the agent report different figures week to week
+    # with no explanation. Read from what ingest persisted — status() must not
+    # make a network call.
+    path_line = "**source path** unknown (no ingest run recorded)"
+    if len(prov_row):
+        try:
+            prov = json.loads(prov_row.iloc[0]["provenance"])
+        except (ValueError, TypeError):
+            prov = {}
+        if prov.get("players_current") == "live":
+            path_line = ("**source path** live FPL API — current season is up to date; "
+                         "figures are comparable to previous live runs")
+        elif prov.get("players_current"):
+            path_line = ("**source path** GitHub mirror snapshot (live API was "
+                         "unreachable) — the current-season player list is a periodic "
+                         "snapshot, so the player count is lower and the crosswalk rate "
+                         "higher than a live run. Expected, not a data problem")
+
     return (
         f"**season** {SEASON}  |  **players** {players}  |  **next GW** {nxt['gw']} "
         f"(first kickoff {nxt['ko']})\n\n"
+        f"{path_line}\n\n"
         f"**historical rows**\n{_md(counts)}\n\n**recent runs**\n{_md(runs)}"
     )
 

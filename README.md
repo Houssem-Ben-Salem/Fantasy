@@ -230,6 +230,16 @@ Both are correct. The live figure is the fresher one and the one to prefer — t
 players are registrations made since the mirror snapshot, which in August is exactly
 where new signings live. A *lower* rate here is the healthier number.
 
+**CI is the only place the live path runs routinely.** GitHub runners can reach the FPL
+API; most agent sandboxes get a 403. If a runner ever falls back to the mirror, the
+workflow emits a warning and records the path in the run summary rather than failing —
+a mirror run is a correct run, and losing fresh projections on a deadline Friday over a
+provenance question is the wrong trade. To tell which path produced any given export,
+read `exports/run_metadata.json`, which is committed alongside the CSVs and carries the
+resolved path, player count, and crosswalk rate for that run. `status()` reports the
+same thing to the agent. So a number that moves between runs should be explainable from
+the artefact itself, without correlating against a CI log that may have aged out.
+
 The invariant that does hold on every path: unmatched players are new signings and
 promoted-club players with genuinely no history, **not** a join failure. If the rate
 ever hits 1.0, that is not success — see the season-gating section below.

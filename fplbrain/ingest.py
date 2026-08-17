@@ -514,6 +514,16 @@ def run(db_path: str, current: str = CURRENT_SEASON, history: list[str] | None =
         for msg in distinctness["problems"]:
             log.error("DATA INTEGRITY: %s", msg)
 
+    # Persist the crosswalk alongside the source paths. The match rate is
+    # path-dependent — live bootstrap-static carries more current-season players
+    # than the mirror snapshot, so the rate moves with the path, not with data
+    # quality. Storing both together means anything reading this row later can
+    # explain a shifted rate without correlating against a CI log.
+    provenance["crosswalks"] = {s: c.get("match_rate") for s, c in crosswalks.items()}
+    provenance["current_season_players"] = int(pd.read_sql(
+        "SELECT COUNT(*) n FROM players WHERE season=?", conn, params=(current,)
+    ).iloc[0]["n"])
+
     conn.execute(
         "INSERT OR REPLACE INTO runs (run_id, created_at, season, notes, provenance) VALUES (?,?,?,?,?)",
         (
