@@ -392,6 +392,36 @@ knows is a rearrangement wearing a different hat, and will behave like shrinkage
 and resampling did here. The two look identical until you test them, which is
 exactly what Tier 1 item 1 below now exists to do.
 
+### Three instances, and what they share
+
+This section has now failed three remedies, each principled, each correctly
+derived from a real defect this document measured:
+
+| remedy | the defect it targets | verdict |
+|---|---|---|
+| resampled efficiency | selection bias (§4) | +1.9, CI ±16; unresolvable at any feasible n |
+| shrinkage | estimation error in the inputs | +0.2, CI [−1.7, +2.2] |
+| DefCon recalibration | under-dispersion, β = 1.24 (§3) | prize capped at 1.2%; −0.09/−0.47/+0.30% out-of-sample |
+
+**What they share is not that they are bad ideas. It is that all three transform
+existing estimates rather than adding information.** Resampling reshuffles how we
+choose from the projections; shrinkage rescales them; recalibration rescales one
+component's probabilities — and being strictly monotone, it cannot even reorder
+the players it rescales.
+
+That is the sharp form of the rule, and it is predictive rather than merely
+descriptive: **a transformation of what we already know cannot manufacture what we
+do not.** Applied to the roadmap, it says the only candidate that has not yet
+failed a test is the one that is not a transformation — Friday team news, which
+carries information the model provably cannot infer, because §2's oracle shows
+minutes are 47% of the addressable gap and no rearrangement of current inputs
+closes any of it.
+
+It also explains why Tier 1 item 1 must be a *measurement* rather than a build. A
+lineup source that re-encodes what persistence already knows is a transformation
+wearing the costume of new information, and will fail exactly as these three did.
+`P(come in | benched)` is the test that tells the two apart.
+
 This is the single most useful finding here, because it redirects effort.
 Optimiser sophistication is a dead end. Input quality is everything — but only
 input quality that is *new*.
