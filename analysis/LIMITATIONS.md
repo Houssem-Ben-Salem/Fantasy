@@ -127,11 +127,65 @@ inflates resolution and reproduces the identical class of error one level up.
 **DefCon is significantly under-dispersed**, by two independent routes that agree:
 the paired-bootstrap crossing excludes zero, giving `Var(π) > 0.02262`, and the
 binned estimate lands at 0.02348 — just above that bound, as it must. `β = 1.239`
-confirms the direction and supplies the correction. Recalibrating DefCon by
-scaling its logits is therefore a concrete, cheap improvement with a known factor.
+confirms the direction.
 
 Both `captured` figures are **upper bounds**, because binning coarsens away
 within-bin variation and so understates `Var(π)`, which sits in the denominator.
+
+### "captured ≤ 96.3%" and "β = 1.239" are not in tension
+
+They look contradictory — a model capturing 96% of achievable Brier ought to be
+well calibrated, and a well-calibrated model has β ≈ 1. The Murphy decomposition
+shows they measure **different terms of the same identity**:
+
+```
+BS = reliability - resolution + uncertainty
+
+clean sheet   reliability 0.00254   resolution 0.00931   uncertainty 0.19570
+DefCon        reliability 0.00167   resolution 0.02373   uncertainty 0.16367
+```
+
+`captured` is about **resolution** — how much of the real spread in π the model
+detects. `β` is about **reliability** — whether the detected spread is correctly
+scaled. A model can be highly informative and slightly compressed at the same
+time, and DefCon is exactly that.
+
+This bounds the recalibration prize precisely. **Reliability is the only term any
+recalibration can remove, and for DefCon it is 0.00167 — 1.2% of the Brier.**
+That is the ceiling, before asking whether it is achievable at all.
+
+### The recalibration does not survive out-of-sample validation
+
+Fitting `(a, b)` on early gameweeks and evaluating on later ones:
+
+```
+fit gw<20, test gw>=20:   a=+0.398 b=1.183   Brier 0.1366 -> 0.1367   -0.09%
+fit gw<24, test gw>=24:   a=+0.435 b=1.224   Brier 0.1329 -> 0.1335   -0.47%
+fit gw<28, test gw>=28:   a=+0.367 b=1.217   Brier 0.1325 -> 0.1321   +0.30%
+```
+
+Two of three are negative and all three sit inside ±0.5%. The in-sample gain
+(0.1410 → 0.1400) is fitting noise, which the 1.2% reliability ceiling already
+predicted. **β is stable and real; correcting for it buys nothing measurable.**
+
+Three further facts make this decisive rather than merely discouraging:
+
+1. **Recalibration cannot reorder anyone.** `sigmoid(a + b·logit p)` is strictly
+   monotone, so the Spearman correlation between raw and recalibrated `p_defcon`
+   is 1.000000 exactly. It cannot improve which defenders the model prefers — only
+   how much weight DefCon carries against goals, assists and clean sheets.
+2. **Slope-only recalibration is actively harmful.** Applying `β` without the
+   intercept moves the mean to 0.1633 against an actual rate of 0.2062 and makes
+   the Brier *worse* (0.1410 → 0.1427). The phrase "scale the logits by β",
+   which an earlier draft of this document used, describes a change that degrades
+   the model.
+3. **It still moves the squad.** 13 of 15 survive; Semenyo and Mykolenko out,
+   Anderson and Virgil in, two of them in the XI. So the effect is not nil — it
+   perturbs decisions without evidence that it improves them, which is the worst
+   available combination.
+
+This is §5's pattern one level down: a principled correction, correctly derived
+from a real defect, that does not survive measurement.
 
 ### A correction to an earlier correction
 
@@ -301,6 +355,28 @@ against +0.2 [−1.7, +2.2]). Two estimators agreeing is the evidence. The ACF
 carries no weight here in either direction, and `exp3b_power.py` now prints the
 white-noise reference alongside it so it cannot be over-read again.
 
+### Deciding an unresolvable question
+
+"No feasible experiment separates resampling from zero" is a result, not a shrug.
+760 independent windows is roughly 150 seasons. The question will never be
+settled on evidence, so it has to be settled on other grounds — and those all
+point the same way:
+
+- **naive is one solve; resampling is sixteen** (fifteen perturbed plus a final
+  frequency solve), so it is ~16× the compute for an effect indistinguishable
+  from zero.
+- **naive has fewer moving parts.** Resampling adds a perturbation scale, a
+  resample count and a seed, none of which can be tuned against evidence for the
+  same reason the effect cannot be measured. Untunable parameters are places for
+  silent misconfiguration to live.
+- **the point estimate is +1.9 with a CI spanning ±16**, so nothing is being
+  given up.
+
+**Keep the naive solve.** Written down here so the option is not reopened every
+time someone rediscovers Michaud — the argument for resampling is sound in
+theory, and that is exactly why it needs a standing answer rather than a
+re-derivation.
+
 ### Why remedies cannot work here
 
 The pathologies in §4 are **downstream of input error**. The selection bias is
@@ -443,14 +519,17 @@ than accidental.
 
 ### Tier 4 — validate what we have
 
-10. **Recalibrate DefCon — this is a fix, not a check.** §3 establishes
-    significant under-dispersion with `β = 1.239`, so scaling the DefCon logits
-    by that factor is a concrete improvement with a measured magnitude. Do it,
-    then re-run `exp4_calibration.py` and confirm the crossing closes. Promote
-    above the November re-fit; it needs no new data.
+10. **Do NOT recalibrate DefCon yet.** A previous version of this list promoted
+    it as a free win. §3 now shows the reliability term caps the prize at 1.2%
+    of the Brier, three out-of-sample splits deliver none of it, the transform
+    cannot reorder players at all, and it still churns 2 of 15 squad places.
+    Revisit only with 2026-27 data, and only if `(a, b)` refit there still
+    improves a held-out Brier. Left as a live item because the *defect* is real
+    and stable (β = 1.18–1.22 across splits) — it is the *fix* that fails.
 11. **Re-fit DefCon priors in November** on 2026-27 data. One season of a
     one-season-old rule, and §3 shows the fitted spread is too narrow — both
-    point the same way.
+    point the same way. This remains the higher-value of the two, because more
+    data addresses the cause rather than rescaling the symptom.
 12. **Widen the optimiser comparison only for shrinkage, and only to ~17
     independent windows** (§5's power table). Resampling is closed: no feasible
     experiment separates it from zero. Do not spend windows on it.
@@ -476,10 +555,11 @@ than accidental.
   and §1's ceiling analysis should be re-run immediately after to find the new
   bottleneck.
 - **Shrinkage at +2 points is detectable, but costs ~17 independent windows**
-  (≈3–4 seasons at five per season). An earlier draft set this trigger at "20+
-  windows", which resolves ±8 at best — the measurement would never have
-  concluded. It is kept because the effect size is plausible and shrinkage is
-  nearly free to adopt, but the timescale is honest now.
+  (≈3–4 seasons at five per season, so **2029 or not at all**). An earlier draft
+  set this trigger at "20+ windows", which resolves ±8 at best — the measurement
+  would never have concluded. Kept because the effect size is plausible and
+  shrinkage is nearly free to adopt, but say the date out loud: a threshold that
+  implies a check next spring is worse than no threshold.
 - **Resampling is closed on power grounds, not on evidence.** Detecting +2 needs
   ~760 windows, roughly 150 seasons. Even +15 needs 14. No feasible experiment
   will separate it from zero, so the point estimate of +1.9 is where it stays.
