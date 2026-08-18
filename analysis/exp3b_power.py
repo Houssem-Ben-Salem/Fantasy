@@ -122,26 +122,36 @@ def report(piv: pd.DataFrame) -> None:
     print("\nPAIRED DIFFERENCES (XI + captain, per 6-GW window), n =", len(piv))
     print(piv.round(0).to_string())
 
+    n = len(piv)
+    # For INDEPENDENT draws with an estimated mean, the sample lag-1
+    # autocorrelation is biased downward: E[r1] ~ -1/(n-1), and SE(r1) ~ 1/sqrt(n).
+    # At n=8 that is -0.143 +/- 0.354, so almost nothing is distinguishable.
+    exp_r1 = -1.0 / (n - 1)
+    se_r1 = 1.0 / np.sqrt(n)
     print("\n" + "=" * 74)
-    print("0. IS THE OVERLAP ACTUALLY BITING? — measure, do not assume")
+    print("0. CAN THE AUTOCORRELATION TELL US ANYTHING? — no, at this n")
     print("=" * 74)
-    # The overlap induces dependence in the LEVELS by construction. Whether it
-    # survives into the PAIRED DIFFERENCES is an empirical question, and it is
-    # the differences the test is run on.
+    print(f"  white-noise reference at n={n}:  E[r1] = {exp_r1:+.3f}, "
+          f"SE(r1) = {se_r1:.3f}")
     for s in ("naive", "shrunk", "resampled"):
-        print(f"  lag-1 autocorr, levels     {s:<10} {lag1(piv[s].to_numpy()):+.3f}")
+        r = lag1(piv[s].to_numpy())
+        print(f"    levels      {s:<10} r1 {r:+.3f}   "
+              f"({(r - exp_r1) / se_r1:+.1f} SE from white noise)")
     for s in ("shrunk", "resampled"):
         d = (piv[s] - piv["naive"]).dropna().to_numpy()
-        rho = lag1(d)
-        if rho > 0:
-            note = f"-> effective n {effective_n(len(d), rho):.1f} of {len(d)}"
-        else:
-            note = "-> no positive dependence; naive SE is NOT inflated"
-        print(f"  lag-1 autocorr, differences {s:<10} {rho:+.3f} {note}")
-    print("\n  Pairing removes the window effect, and with it the dependence the")
-    print("  overlap creates. The levels are autocorrelated; the differences the")
-    print("  test actually uses are not. The interval below is therefore usable,")
-    print("  which is a measured result rather than an assumed one.")
+        r = lag1(d)
+        print(f"    differences {s:<10} r1 {r:+.3f}   "
+              f"({(r - exp_r1) / se_r1:+.1f} SE from white noise)")
+    print("""
+  READ THIS CORRECTLY. The differences sit ON the white-noise expectation, so
+  there is NO negative dependence to explain — just the standard small-sample
+  bias. And the levels, which ARE dependent by construction, land under 1 SE
+  from white noise, so the ACF cannot detect the thing we know is there.
+
+  The autocorrelation therefore carries no weight in either direction at n=8.
+  The warrant for using the naive SE is section 3: the moving-block bootstrap,
+  which tolerates dependence, returns essentially the same interval. Two
+  estimators agreeing is the evidence; the ACF is not.""")
 
     print("\n" + "=" * 74)
     print("1. OVERLAPPING WINDOWS, naive SE")
@@ -175,10 +185,37 @@ def report(piv: pd.DataFrame) -> None:
         print(f"{s:>10} vs naive:  mean {d.mean():+6.1f}  95% CI [{lo:+.1f}, {hi:+.1f}]")
 
     print("\n" + "=" * 74)
+    print("4. POWER — what could this design ever detect?")
+    print("=" * 74)
+    # Two-sided alpha=0.05, 80% power: n = ((z_a + z_b) * SD / delta)^2
+    Z = 1.959964 + 0.841621
+    print(f"  {'strategy':<12} {'SD':>6} {'SE':>6} {'MDE at n=' + str(n):>12}"
+          f" {'n for +2':>10} {'n for +5':>10} {'n for +15':>10}")
+    for s in ("shrunk", "resampled"):
+        d = (piv[s] - piv["naive"]).dropna().to_numpy()
+        sd = d.std(ddof=1)
+        se = sd / np.sqrt(len(d))
+        need = {delta: int(np.ceil((Z * sd / delta) ** 2)) for delta in (2, 5, 15)}
+        print(f"  {s:<12} {sd:>6.1f} {se:>6.1f} {Z * se:>11.1f}p"
+              f" {need[2]:>10} {need[5]:>10} {need[15]:>10}")
+    print("""
+  A trigger below the MDE is a measurement that will never resolve. Note the two
+  strategies differ by an order of magnitude: shrinkage moves the squad barely at
+  all, so its differences are tight and a small effect is reachable; resampling
+  reshuffles the squad wholesale, so its differences are wide and a small effect
+  is not reachable at any realistic n.
+
+  Against §7's ceiling of about 5 INDEPENDENT 6-gameweek windows per season, read
+  the 'n for' columns in seasons, not in windows.""")
+
+    print("\n" + "=" * 74)
     print("VARIANCE DECOMPOSITION — why none of this resolves")
     print("=" * 74)
-    print(f"  between-window SD                  {piv.mean(axis=1).std(ddof=1):.1f}")
-    print(f"  between-strategy SD within window  {piv.std(axis=1).mean():.1f}")
+    bw = piv.mean(axis=1).std(ddof=1)
+    ws = piv.std(axis=1).mean()
+    print(f"  between-window SD                  {bw:.1f}")
+    print(f"  between-strategy SD within window  {ws:.1f}")
+    print(f"  ratio                              {bw / ws:.1f}x")
     print("\n  Which gameweeks you are in dominates which optimiser you use.")
 
 

@@ -68,43 +68,104 @@ The minutes model is currently an average of recent start rates times an
 availability multiplier. It is the crudest component in the system and it carries
 the most weight.
 
-## 3. The probability components — better than they looked, but the method has a limit
+## 3. The probability components — better than they looked, and now measurable
 
 My first read was that clean-sheet prediction was weak: Brier 0.1891 against a
 0.1957 base-rate baseline, only 3.4% better. That read was wrong, and wrong in the
 same way as reading 0.33 against 1.0.
 
-For a binary outcome, predicting the base rate gives Brier `p̄(1-p̄)`. Knowing each
-case's true probability gives `p̄(1-p̄) - Var(p)`. **`Var(p)` is the entire reducible
-portion**; everything else is coin-flip noise.
+Writing `π` for the true conditional probability of each case,
 
-| component | baseline | floor | ours | naive read | captured |
-|---|---|---|---|---|---|
-| clean sheet | 0.1957 | 0.1858 | 0.1891 | 3.4% better | **66.5%** |
-| DefCon | 0.1637 | 0.1478 | 0.1410 | 13.8% better | **not computable** |
+```
+BS = E[(p - π)²] + E[π(1 - π)] = MSE(p, π) + p̄(1 - p̄) - Var(π)
+```
 
-**The DefCon floor is falsified by its own data.** Our Brier (0.1410) comes in
-*below* the estimated floor (0.1478), which is impossible if the floor were right.
-`Var(p)` is unobservable and was estimated from the model's own predicted
-variance; a score beneath it means the model is **under-dispersed** — true
-probabilities vary more than our predictions do — so `Var(p)` was underestimated
-and the floor set too high. No `captured` figure can be quoted for DefCon. An
-earlier draft of this document quoted 56.2%; that number should not be used.
+so **`Var(π)` is the entire reducible portion** and `captured = (baseline - BS) / Var(π)`.
+Everything below that floor is coin-flip noise no model removes.
 
-The same problem afflicts clean sheets more mildly, and in the same direction. The
-dispersion check:
+### Estimating Var(π) is the whole difficulty
+
+An earlier draft substituted `Var(p)` — the variance of our *own* predictions —
+which assumes the model is calibrated, i.e. assumes the answer. Doing that gave
+DefCon a "captured" share of 143%, which is not a triumph but a **falsification of
+the floor**: a Brier below a floor derived from our own predicted variance can only
+happen if `Var(π) > Var(p)`.
+
+That crossing is a *bound*, not merely a sign. Rearranging the identity,
+
+```
+Var(π) - Var(p) = [floor_est - BS] + MSE(p, π)    and MSE ≥ 0
+```
+
+so `Var(π) > Var(p) + (floor_est - BS)` strictly. Because both terms come from the
+same sample their errors are correlated, so the crossing is bootstrapped on
+**paired** resamples rather than composed from separate standard errors.
+
+The independent measurement is the **calibration slope**: regress `y` on
+`logit(p)`. `β > 1` means the true probabilities are more spread out than the
+predictions — under-dispersion — and `β` is the correction factor itself. The
+crossing establishes existence; the slope gives magnitude.
+
+`Var(π)` itself is then estimated from a **binned resolution term with the
+within-bin sampling variance subtracted**. Without that subtraction, bin noise
+inflates resolution and reproduces the identical class of error one level up.
+
+### Results
+
+| | clean sheet | DefCon |
+|---|---|---|
+| n | 3,049 | 5,694 |
+| baseline Brier | 0.1957 | 0.1637 |
+| our Brier | 0.1891 | 0.1410 |
+| naive read | 3.4% better | 13.8% better |
+| `floor(Var(p)) − BS` | −0.0033 | **+0.0068**, 95% CI (0.0043, 0.0093) |
+| calibration slope β | 0.844 | **1.239** |
+| Var(p), circular | 0.00991 | 0.01582 |
+| Var(π), debiased | 0.00870 | 0.02348 |
+| **captured** | ≤ **75.8%** | ≤ **96.3%** |
+
+**DefCon is significantly under-dispersed**, by two independent routes that agree:
+the paired-bootstrap crossing excludes zero, giving `Var(π) > 0.02262`, and the
+binned estimate lands at 0.02348 — just above that bound, as it must. `β = 1.239`
+confirms the direction and supplies the correction. Recalibrating DefCon by
+scaling its logits is therefore a concrete, cheap improvement with a known factor.
+
+Both `captured` figures are **upper bounds**, because binning coarsens away
+within-bin variation and so understates `Var(π)`, which sits in the denominator.
+
+### A correction to an earlier correction
+
+A previous draft of this section claimed clean sheets were under-dispersed too,
+"more mildly and in the same direction", on this evidence:
 
 ```
 clean-sheet spread across teams
-  modelled  0.155 to 0.454   sd 0.072
-  realised  0.099 to 0.518   sd 0.099
+  modelled  sd 0.072      realised  sd 0.099
 ```
 
-The model's spread is narrower than reality's. So the floor is again somewhat too
-high, reducible too small, and **66.5% is an over-estimate of an unknown true
-figure.** The safe conclusion is directional: clean-sheet modelling captures a
-substantial majority of what is available and is one of the better parts of the
-system, not the worst. The precise percentage is not defensible.
+**That was wrong, and wrong by the same mechanism the section exists to fix.** The
+realised spread is a set of proportions and carries sampling noise; the modelled
+spread does not. Comparing them directly is the un-debiased comparison all over
+again. Correcting it requires knowing the independent sample size per team — and
+that is *not* the ~152 player-rows, because every GK and defender from one club in
+one fixture shares the same clean-sheet outcome (§4 measures r = 0.51 among
+same-team defenders). The independent unit is the **match**, about 30 per team:
+
+```
+realised, raw                       sd 0.099
+  debiased as if rows independent   sd 0.093   (wrong by ~5x)
+  debiased per independent match    sd 0.061   <- correct
+```
+
+So the model's spread (0.072) is *wider* than reality's (0.061): clean sheets are
+mildly **over**-dispersed, which is exactly what `β = 0.844 < 1` says. The two
+measurements agree once the noise correction is right. §4's correlation finding
+turns out to bite §3's dispersion check.
+
+Direction matters for how the numbers are read. Where `Var(π) > Var(p)`
+(DefCon), a figure computed with `Var(p)` is an upper bound; where
+`Var(π) < Var(p)` (clean sheets), it is a lower bound. The sign is measured, not
+assumed.
 
 ## 4. The optimiser has three real pathologies
 
@@ -188,26 +249,57 @@ between-strategy SD within window   9.3
 
 **Neither helps, under all three estimators.** And the variance decomposition
 explains why: which six gameweeks you are in swings the outcome by roughly ±42
-points; which optimiser you use swings it by ±9.
+points; which optimiser you use swings it by ±9. **Window choice dominates
+strategy choice by 4.5×**, which is the most useful number in this section.
 
-### A methodological worry that did not survive measurement
+### What this design could ever detect
+
+Two-sided α = 0.05, 80% power. The two strategies differ by an order of magnitude
+and must not be given a common threshold:
+
+| strategy | SD | SE | MDE at n=8 | n for +2 | n for +5 | n for +15 |
+|---|---|---|---|---|---|---|
+| shrunk | 2.9 | 1.0 | **2.8 pts** | 17 | 3 | 1 |
+| resampled | 19.7 | 7.0 | **19.5 pts** | 760 | 122 | 14 |
+
+Shrinkage barely moves the squad, so its differences are tight and a small effect
+is reachable. Resampling reshuffles it wholesale, so its differences are wide and
+a small effect is not reachable at any realistic n. Read the `n for` columns
+against §7's ceiling of about **five independent windows per season** — so in
+seasons, not in windows.
+
+### The autocorrelation cannot settle anything at this n
 
 The 8 windows overlap by half, so the paired differences ought to be
-autocorrelated, making a plain SE anti-conservative. Measured:
+autocorrelated, making a plain SE anti-conservative. The temptation is to check
+the sample ACF and declare the matter resolved. It cannot be.
+
+For **independent** draws with an estimated mean, the sample lag-1
+autocorrelation is biased downward: `E[r₁] ≈ −1/(n−1)`, which at n = 8 is
+**−0.143**, with `SE(r₁) ≈ 1/√n = 0.354`. Against that reference:
 
 ```
-lag-1 autocorrelation, LEVELS       naive +0.178   shrunk +0.201   resampled +0.040
-lag-1 autocorrelation, DIFFERENCES  shrunk -0.167  resampled -0.071
+                              r₁       distance from white noise
+levels      naive          +0.178            +0.9 SE
+levels      shrunk         +0.201            +1.0 SE
+differences shrunk         -0.167            -0.1 SE
+differences resampled      -0.071            +0.2 SE
 ```
 
-The overlap does show up in the levels, exactly as construction implies — but
-**pairing removes the window effect, and the dependence with it.** The differences
-the test actually runs on are not positively autocorrelated, so the naive SE is
-not inflated. The reasoning was sound and the conclusion was still wrong, which is
-why `exp3b_power.py` measures this rather than asserting it in either direction.
-The non-overlapping and bootstrap estimates are reported regardless, and all three
-agree — that agreement, not any single interval, is the reason to believe the
-finding.
+The differences sit **on** the white-noise expectation — so there is no negative
+dependence to explain, just small-sample bias. And the levels, which *are*
+dependent by construction, land under 1 SE from white noise, so the ACF cannot
+even detect the dependence we know is there.
+
+An earlier draft read the negative difference-ACFs as evidence that "pairing
+removes the dependence." That over-read the statistic: −0.167 at n = 8 is what
+independence looks like, not evidence of anything.
+
+**The warrant for using the naive SE is the moving-block bootstrap**, which
+tolerates dependence and returns essentially the same interval (+0.2 [−1.6, +2.0]
+against +0.2 [−1.7, +2.2]). Two estimators agreeing is the evidence. The ACF
+carries no weight here in either direction, and `exp3b_power.py` now prints the
+white-noise reference alongside it so it cannot be over-read again.
 
 ### Why remedies cannot work here
 
@@ -351,13 +443,17 @@ than accidental.
 
 ### Tier 4 — validate what we have
 
-10. **Re-fit DefCon in November** on 2026-27 data and compare priors. §3 shows the
-    current model is under-dispersed on DefCon, so this is not merely a check.
-11. **Re-run the calibration floor** once two seasons exist, estimating `Var(p)`
-    from realised outcomes rather than from the model's own predictions, which §3
-    shows is circular.
-12. **Widen the optimiser comparison** to 20+ *independent* windows across two
-    seasons before concluding anything about §5 beyond "no large effect."
+10. **Recalibrate DefCon — this is a fix, not a check.** §3 establishes
+    significant under-dispersion with `β = 1.239`, so scaling the DefCon logits
+    by that factor is a concrete improvement with a measured magnitude. Do it,
+    then re-run `exp4_calibration.py` and confirm the crossing closes. Promote
+    above the November re-fit; it needs no new data.
+11. **Re-fit DefCon priors in November** on 2026-27 data. One season of a
+    one-season-old rule, and §3 shows the fitted spread is too narrow — both
+    point the same way.
+12. **Widen the optimiser comparison only for shrinkage, and only to ~17
+    independent windows** (§5's power table). Resampling is closed: no feasible
+    experiment separates it from zero. Do not spend windows on it.
 
 ### Explicitly deprioritised
 
@@ -379,8 +475,14 @@ than accidental.
   Tier 1 item 1 could close a large fraction of the 0.2118 minutes gap on its own,
   and §1's ceiling analysis should be re-run immediately after to find the new
   bottleneck.
-- If the optimiser comparison at 20+ independent windows shows shrinkage helping
-  by even +2 points reliably, that is nearly free and should be adopted despite §5.
-- If `Var(p)` estimated from realised outcomes puts our clean-sheet Brier well
-  above the floor, §3's "substantial majority captured" is too generous and
-  clean sheets rejoin the priority list.
+- **Shrinkage at +2 points is detectable, but costs ~17 independent windows**
+  (≈3–4 seasons at five per season). An earlier draft set this trigger at "20+
+  windows", which resolves ±8 at best — the measurement would never have
+  concluded. It is kept because the effect size is plausible and shrinkage is
+  nearly free to adopt, but the timescale is honest now.
+- **Resampling is closed on power grounds, not on evidence.** Detecting +2 needs
+  ~760 windows, roughly 150 seasons. Even +15 needs 14. No feasible experiment
+  will separate it from zero, so the point estimate of +1.9 is where it stays.
+- If the November DefCon recalibration (scaling logits by β ≈ 1.24) moves the
+  Brier materially, §3's ≤96.3% was too generous and DefCon has more headroom
+  than it appears.
