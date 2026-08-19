@@ -34,6 +34,26 @@ players, which makes the optimiser avoid them. The squad is SELECTED ON
 AVAILABILITY and will look cleaner than a random 15 for structural reasons. That
 is correct behaviour. It just is not information.
 
+WHAT THIS CHECK CANNOT SEE — READ BEFORE TRUSTING A CLEAN LOG
+------------------------------------------------------------
+It watches `players.status`, and that field reports INJURIES. It says nothing
+about ROTATION. A player who will be benched and a player who will start 90
+minutes are identical to this check, right up until the lineups drop.
+
+So the three decisions actually open on this squad are invisible here:
+
+    Walle Egeli   p_start 0.350   <- the flat prior for NO history, not a read
+    Mateta        p_start 0.645   <- lone forward; a rotated one is the big hole
+    Calvert-Lewin p_start 0.640   <- first sub
+
+A clean log every night through Friday is genuine reassurance about injuries and
+tells you NOTHING about any of the three. That is the boundary of what this data
+supports, not a defect in the check — and it is exactly why the deadline session
+is a SEARCH task (press conferences, predicted line-ups) rather than a query.
+
+Combined with the selection-on-availability note above: a clean result confirms
+nothing has changed SINCE SELECTION. It does not say the squad was well chosen.
+
 EXIT CODES  (so cron/alerting can key on them)
   0  checked, squad clean
   1  checked, one or more of the 15 is flagged  -> run the deadline session now
