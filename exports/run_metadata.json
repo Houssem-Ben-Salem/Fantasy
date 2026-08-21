@@ -1,9 +1,9 @@
 {
   "connectivity": {
     "club_elo": {
+      "error": "ReadTimeout",
       "ok": false,
-      "role": "optional",
-      "status": 502
+      "role": "optional"
     },
     "fpl_api": {
       "ok": true,
@@ -27,21 +27,21 @@
     }
   },
   "crosswalk_match_rate": {
-    "2024-25": 0.598,
-    "2025-26": 0.78
+    "2024-25": 0.591,
+    "2025-26": 0.77
   },
-  "current_season_players": 590,
-  "generated_at_utc": "2026-08-17T19:42:00.059914+00:00",
+  "current_season_players": 599,
+  "generated_at_utc": "2026-08-21T06:51:39.122762+00:00",
   "horizon": {
     "end": 8,
     "gameweeks": 8,
     "start": 1
   },
   "note": "resolved_path explains the headline numbers. A 'mirror' run has a lower current_season_players and a higher crosswalk_match_rate than a 'live' run because the mirror's players_raw.csv is a periodic snapshot and a strict subset of the live player list. Both are correct; live is fresher.",
-  "projection_rows": 4720,
+  "projection_rows": 4792,
   "resolved_path": "live",
-  "run_created_at": "2026-08-17T19:41:48.177155+00:00",
-  "run_id": "proj-20260817T194148",
+  "run_created_at": "2026-08-21T06:51:31.605614+00:00",
+  "run_id": "proj-20260821T065131",
   "season": "2026-27",
   "source_paths": {
     "fixtures_2024-25": "github",
