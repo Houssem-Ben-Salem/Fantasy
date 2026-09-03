@@ -1,6 +1,28 @@
 #!/usr/bin/env python3
 """
+GUARD — not a diagnostic. Do not delete in a cleanup.
+
+Until models.DixonColes.fit shrinks its team ratings, this check is the only
+thing standing between the MILP and a squad of Hull defenders. Measured
+2026-09-03, four of the top five projected players in the entire game were
+GBP4.0-4.1m Hull defenders, all above Haaland, and plan_transfers wanted two -4
+hits to buy three of them.
+
 Are any Dixon-Coles team ratings pinned at the optimiser's bound?
+
+WHY THE BOUND MADE IT WORSE, NOT BETTER
+---------------------------------------
+bounds=[(-3,3)] on the rating parameters looks like defensive programming. It is
+the opposite here. Unbounded, a divergent parameter goes to inf and the
+projection becomes inf/nan — which crashes, or at minimum cannot be selected by
+a maximiser. The bound converts divergence into a FINITE, plausible-looking
+number, and finite is exactly what an optimiser hunts.
+
+LIMITATIONS.md §4 measured the MILP as an estimation-error maximiser: it selects
+whatever is most overestimated, because it cannot distinguish a high estimate
+from a high error. A boundary value is the limiting case of that — not an
+overestimate but a non-estimate, and the most selectable object in the pool. So
+the bound did not merely disguise the failure. It turned a crash into a target.
 
 THE DEFECT
 ----------
@@ -41,8 +63,26 @@ models.DixonColes.fit and is a modelling change (shrink team ratings toward zero
 by match count, or a hierarchical prior), which LIMITATIONS.md §5 says should be
 validated out-of-sample before adoption, not shipped mid-gameweek.
 
-Until then this is a DETECTOR: it fails loudly when any rating is at the bound,
-so a projection built on one is never read as an estimate.
+Until then this is a GUARD: it fails loudly when any rating is at the bound, so
+a projection built on one is never read as an estimate.
+
+KNOWN GAP — THIS CATCHES ONE SYMPTOM OF TWO
+-------------------------------------------
+A team with ZERO finished matches never enters gm.attack/gm.defence at all, and
+expected_goals falls back to min(attack)/max(defence) for it. That produces no
+boundary value, so this check stays silent. It is the same root cause (no
+shrinkage, no prior) presenting through a different path, and it is what the
+GW1 comparison hit before the promoted clubs had played. TODO: also flag any
+2026-27 team absent from the fitted ratings.
+
+TODO, deferred past the GW3 deadline by instruction: test a ridge penalty
++ lambda*(sum att^2 + sum dfn^2) in the NLL, which is a Gaussian prior on league
+average and lets match count weight itself. Score it TWICE — held-out match
+log-likelihood AND whether the optimal squad under shrinkage still contains
+promoted-club players at implausible rank. The second is the one that matters,
+because the failure was in the decision layer, not the fit: a lambda that barely
+moves likelihood could still remove four phantom players from the top five.
+Ship only if it clears both, per LIMITATIONS.md §5.
 
 EXIT CODES
   0  no rating at the bound
