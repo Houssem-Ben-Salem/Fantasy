@@ -50,6 +50,41 @@ PRIOR_STRENGTH = 450.0  # minutes of "prior evidence"; ~5 full matches
 # ------------------------------------------------------------------ 1. goals
 
 
+# Ridge penalty on Dixon-Coles team ratings: + lambda * (sum att^2 + sum dfn^2).
+# Validated out-of-sample in analysis/validate_goal_ridge.py.
+#
+# Without it the fit is raw MLE bounded at +/-3. A promoted club with two matches
+# has a nearly flat likelihood, the optimiser walks to the bound, and exp() of
+# the bound is not an estimate — 2026-27 put COV attack and HUL defence at
+# -3.000, four GBP4.0m Hull defenders in the top five projected players, and a
+# 96% Man City clean sheet against a market 49%. The bound made it worse, not
+# safer: unbounded it would diverge to inf and crash; bounded it becomes a
+# finite value, which is exactly what the optimiser hunts.
+#
+# CHOSEN ON 2025-26 by a rule fixed before the choice (most wins on gameweeks
+# where the baseline was not itself pinned, ties broken by mean held-out LL,
+# goal-level bias within 2%): lambda=2 won 6/8 clean weeks, +0.048 LL/match, and
+# removed every pinned rating. CONFIRMED on 2026-27 frozen: mean held-out LL
+# +0.053/match, zero pinned ratings in every refit (the raw fit had two in every
+# one), and against the Pinnacle GW3 market line clean-sheet correlation rose
+# 0.563 -> 0.792 with spread 0.236 -> 0.122 (market 0.105).
+#
+# HONEST CAVEATS, recorded rather than buried:
+#   * On 2026-27 it won only 1 of 3 gameweeks. The two losses came entirely from
+#     pinned "this team scores ~0" predictions that happened to come true
+#     (COV 0-1 HUL, MCI 1-0 COV, HUL 0-0 AVL); on every other match ridge was
+#     neutral (-0.040, -0.002, -0.001). Four pinned matches cannot validate on
+#     log-likelihood — one outcome swings it (CHE 2-2 HUL cost the raw fit -7.56).
+#   * It is mildly worse on normal teams very early in a season (-0.04 LL/match
+#     in 2026-27 GW2).
+#   * This form shrinks defence toward 0, and under the sum-to-zero attack
+#     parameterisation defence carries the league scoring rate, so it lowers
+#     predicted goals as lambda grows (-1.5% at lambda=2, -5.7% at 16). A
+#     centred form avoided that but won fewer weeks. Re-check the level bias if
+#     lambda is ever raised.
+GOAL_RIDGE_LAMBDA = 2.0
+
+
 @dataclass
 class DixonColes:
     """
@@ -64,6 +99,7 @@ class DixonColes:
     home_adv: float = 0.0
     rho: float = 0.0
     fitted: bool = False
+    ridge: float = GOAL_RIDGE_LAMBDA   # see GOAL_RIDGE_LAMBDA; 0 reproduces raw MLE
 
     @staticmethod
     def _tau(x, y, lh, la, rho):
@@ -78,15 +114,22 @@ class DixonColes:
         out[m11] = 1 - rho
         return np.clip(out, 1e-9, None)
 
-    def fit(self, matches: pd.DataFrame) -> "DixonColes":
+    def fit(self, matches: pd.DataFrame, teams: list[str] | None = None) -> "DixonColes":
         """
         matches: home_team, away_team, home_score, away_score, kickoff (datetime)
+
+        teams: extra teams to rate even if they have no matches yet. With a ridge
+        penalty a zero-match team settles at the prior (league average) — which
+        is what a promoted club with no results should get. Without this they
+        never enter the ratings and expected_goals assigns them the WEAKEST
+        observed attack and defence, harsher than any market prices them.
         """
         df = matches.dropna(subset=["home_score", "away_score"]).copy()
         if len(df) < 50:
             raise ValueError(f"need >=50 finished matches to fit, got {len(df)}")
 
-        teams = sorted(set(df.home_team) | set(df.away_team))
+        extra = set(teams or []) if self.ridge > 0 else set()
+        teams = sorted(set(df.home_team) | set(df.away_team) | extra)
         idx = {t: i for i, t in enumerate(teams)}
         n = len(teams)
 
@@ -112,7 +155,8 @@ class DixonColes:
                 + poisson.logpmf(as_, la)
                 + np.log(self._tau(hs, as_, lh, la, rho))
             )
-            return -np.sum(w * ll)
+            penalty = self.ridge * (np.sum(att ** 2) + np.sum(dfn ** 2)) if self.ridge else 0.0
+            return -np.sum(w * ll) + penalty
 
         x0 = np.concatenate([np.zeros(n - 1), np.zeros(n), [0.25], [-0.05]])
         bounds = [(-3, 3)] * (n - 1) + [(-3, 3)] * n + [(-1, 1), (-0.2, 0.2)]
@@ -167,7 +211,13 @@ def fit_goal_model(conn: sqlite3.Connection, seasons: list[str], xi: float = 0.0
     df = pd.concat(frames, ignore_index=True)
     df["kickoff"] = pd.to_datetime(df["kickoff_time"], errors="coerce", utc=True)
     df = df.dropna(subset=["kickoff"])
-    return DixonColes(xi=xi).fit(df)
+    # Rate every current-season team, including promoted clubs with no results
+    # yet; the ridge prior places them at league average. The last season in
+    # `seasons` is the current one by convention of every caller.
+    current_teams = pd.read_sql(
+        "SELECT short_name FROM teams WHERE season=?", conn, params=(seasons[-1],)
+    )["short_name"].tolist()
+    return DixonColes(xi=xi).fit(df, teams=current_teams)
 
 
 def reconstruct_results_from_gw(conn: sqlite3.Connection, season: str) -> pd.DataFrame:
