@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
+import numpy as np
 import pandas as pd
 import pulp
 
@@ -297,6 +298,44 @@ def transfer_plan(proj: pd.DataFrame, current_squad: list[int], horizon: list[in
     )
 
 
+def best_legal_xi(players: pd.DataFrame, points_col: str = "exp_points") -> pd.DataFrame:
+    """
+    The highest-scoring FIELDABLE XI from a squad for one gameweek.
+
+    Exact, not heuristic: for a fixed formation the best XI is the top GK plus
+    the top-d DEF, top-m MID and top-f FWD, because XI points are additive and
+    positions only constrain counts. Taking the best of the eight legal
+    formations (XI_MIN/XI_MAX) is therefore optimal.
+
+    Exists because evaluate_chips used ranked.head(11) — the top 11 by points,
+    which is not generally a legal team. Measured on a real squad before the
+    minutes fix, three of five gameweeks produced an XI with ZERO goalkeepers,
+    because the outfield eleven outscored the keeper, who was then counted on the
+    bench. bench_boost_gain is compared against a ~15-point chip threshold, and
+    the error grows exactly where that decision is close (a premium keeper, or a
+    squad where the three-defender minimum binds).
+    """
+    by_pos = {pos: grp.sort_values(points_col, ascending=False)
+              for pos, grp in players.groupby("position")}
+    best, best_pts = None, -np.inf
+    for d in range(XI_MIN["DEF"], XI_MAX["DEF"] + 1):
+        for mid in range(XI_MIN["MID"], XI_MAX["MID"] + 1):
+            for f in range(XI_MIN["FWD"], XI_MAX["FWD"] + 1):
+                if d + mid + f != XI_SIZE - XI_MIN["GK"]:
+                    continue
+                need = {"GK": XI_MIN["GK"], "DEF": d, "MID": mid, "FWD": f}
+                if any(len(by_pos.get(pos, [])) < n for pos, n in need.items()):
+                    continue
+                xi = pd.concat([by_pos[pos].head(n) for pos, n in need.items()])
+                pts = float(xi[points_col].sum())
+                if pts > best_pts:
+                    best, best_pts = xi, pts
+    if best is None:
+        raise ValueError("no legal XI can be formed from this squad "
+                         f"(positions: {players.position.value_counts().to_dict()})")
+    return best
+
+
 def evaluate_chips(proj: pd.DataFrame, squad: list[int], gw: int,
                    bench_elements: list[int] | None = None) -> dict:
     """
@@ -308,11 +347,15 @@ def evaluate_chips(proj: pd.DataFrame, squad: list[int], gw: int,
     if in_squad.empty:
         return {"error": f"no projections for GW{gw}"}
 
-    ranked = in_squad.sort_values("exp_points", ascending=False)
-    xi = ranked.head(11)
-    bench = ranked.tail(4) if bench_elements is None else g[g.element.isin(bench_elements)]
+    # A LEGAL XI, not ranked.head(11) — see best_legal_xi for why that mattered.
+    xi = best_legal_xi(in_squad)
+    if bench_elements is None:
+        bench = in_squad[~in_squad.element.isin(xi.element)]
+    else:
+        bench = g[g.element.isin(bench_elements)]
 
-    best = ranked.iloc[0]
+    # The captain must be someone who starts.
+    best = xi.sort_values("exp_points", ascending=False).iloc[0]
     n_playing = int((in_squad["n_fixtures"] > 0).sum()) if "n_fixtures" in in_squad else len(in_squad)
     doubles = int((in_squad["n_fixtures"] > 1).sum()) if "n_fixtures" in in_squad else 0
 

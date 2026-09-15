@@ -130,17 +130,23 @@ def main() -> int:
         sub = proj[(proj.gw == gw) & (proj.element.isin(squad))]
         if sub.empty:
             continue
+        # Audit the PACKAGE, not a replica of its old logic: evaluate_chips must now
+        # report the value of a fieldable team. A guard that re-implements the
+        # thing it guards keeps passing after the real code regresses.
+        from fplbrain import optimize as opt
+        ev = opt.evaluate_chips(proj, squad, gw)
+        pkg_xi = opt.best_legal_xi(sub)
+        counts = pkg_xi.position.value_counts().to_dict()
+        ok = legal(counts) and abs(ev["xi_projected"] - pkg_xi.exp_points.sum()) < 0.01
         naive = sub.nlargest(11, "exp_points")
-        counts = naive.position.value_counts().to_dict()
-        ok = legal(counts)
         _, best = best_legal_xi(sub)
         flag = "legal" if ok else "ILLEGAL"
         why = "" if ok else "  <- " + ", ".join(
             f"{p}={counts.get(p,0)} (need {XI_MIN[p]}-{XI_MAX[p]})"
             for p in XI_MIN if not XI_MIN[p] <= counts.get(p, 0) <= XI_MAX[p])
         print(f"  GW{gw}: {counts}  {flag}{why}")
-        print(f"        chip_advice XI {naive.exp_points.sum():.2f} xP  vs "
-              f"best legal {best:.2f} xP   overstated by {naive.exp_points.sum()-best:+.2f}")
+        print(f"        chip_advice XI {ev['xi_projected']:.2f} xP (package)  best legal {best:.2f}  "
+              f"naive head(11) would have said {naive.exp_points.sum():.2f}")
         bad += (not ok)
 
     if bad:
