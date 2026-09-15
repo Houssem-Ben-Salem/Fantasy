@@ -184,6 +184,28 @@ def _resolve_players(proj: pd.DataFrame, names: str, expect: int | None = None) 
     return ids
 
 
+def _season_history(conn: sqlite3.Connection, season: str, element: int) -> pd.DataFrame:
+    """
+    One player's season totals across every season, joined on the stable `code`.
+
+    NEVER join cross-season on `element`: it is reassigned every season. The
+    original query did `WHERE element IN (SELECT element ... WHERE code = X)`, which
+    collects this player's element ids from each season and then matches those
+    NUMBERS in every season — so it also pulled in whoever else held that id in the
+    other seasons. For a backup goalkeeper it returned six different players and
+    credited him with 18 goals and 18.58 xG in 2024-25 (those were Wissa's). Every
+    player_detail history table was contaminated the same way, while the DefCon
+    query beside it already keyed on `code` correctly.
+    """
+    return pd.read_sql(
+        """SELECT season, apps, minutes, points, goals, assists, xg, xa,
+                  defcon_actions, defcon_per90, ppg
+           FROM v_season_totals
+           WHERE code = (SELECT code FROM players WHERE season=? AND element=?)
+           ORDER BY season""",
+        conn, params=(season, element))
+
+
 # ------------------------------------------------------------------ tools
 
 
@@ -344,13 +366,7 @@ def player_detail(name: str, n_gw: int = 6) -> str:
             """SELECT web_name, position, now_cost, status, news, chance_next_round,
                       selected_by_percent, penalties_order, corners_fk_order, direct_fk_order
                FROM players WHERE season=? AND element=?""", c, params=(SEASON, element))
-        hist = pd.read_sql(
-            """SELECT season, apps, minutes, points, goals, assists, xg, xa,
-                      defcon_actions, defcon_per90, ppg
-               FROM v_season_totals WHERE element IN (
-                   SELECT element FROM players WHERE code = (
-                       SELECT code FROM players WHERE season=? AND element=?))""",
-            c, params=(SEASON, element))
+        hist = _season_history(c, SEASON, element)
         dcr = pd.read_sql(
             """SELECT season, starts_60, defcon_hits, defcon_rate_per_start
                FROM v_defcon_rate WHERE code = (
