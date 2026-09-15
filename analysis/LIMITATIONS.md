@@ -79,6 +79,27 @@ correction goes further than first drafted.
    close to correct, with no reliable direction. §3's table below still shows the
    pre-ridge figures.
 
+### Minutes do not reallocate within a squad
+
+Found 2026-09-15 preparing GW5. `minutes_model` estimates each player's start
+probability independently. When a teammate is suspended or injured, *their*
+`p_start` correctly drops to 0 — but nobody else's rises. Minutes are conserved in
+real football and not in the model.
+
+Concrete case: Manchester City lost Foden (red card in the GW4 derby, suspended
+until 17 Oct, so GW5 and GW6) and Doku (calf, back ~20 Sep). Cherki, a
+rotation-risk midfielder in exactly that role, stayed at `p_start` 0.49. The
+model therefore recommended selling him for Gibbs-White (+6.62 xP over GW5-9),
+with 78% of that gain landing after the international break — and the GW5-6
+share overstated, because Cherki's minutes there are understated.
+
+This is the in-season face of Tier 1 item 3 (manager-level rotation). A fix would
+redistribute an absent player's expected minutes across same-position teammates
+in proportion to their recent usage — a modelling change, so it needs the same
+out-of-sample test the minutes prior passed before it ships. Until then, treat
+any `p_start` for a player whose direct competitor is flagged as a lower bound,
+and let team news decide.
+
 ### A measured null that is conditional, not settled
 
 The optimiser commits to one XI for the whole horizon rather than re-picking
