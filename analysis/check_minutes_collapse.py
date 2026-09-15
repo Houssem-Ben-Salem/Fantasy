@@ -48,7 +48,11 @@ chip_advice all consume p_start. It also silently explains a transfer verdict â€
 the model scored Semenyo->Cherki as 3.79 xP vs 1.13 xP for GW4 because Cherki
 played 27 minutes in GW1. That verdict is an artefact, not an estimate.
 
-NOT FIXED HERE, per the discipline of not patching mid-gameweek. Two separate
+FIXED 2026-09-15 in 87eac4d (Beta prior MINUTES_PRIOR_K=0.75, validated out-of-sample;
+and ingest.fill_gameweeks_from_live). This guard is RETAINED: it is what caught the
+collapse, and the in-season branch switch is exactly the kind of 'simplification'
+that gets reintroduced. Originally it said: NOT FIXED HERE, per the discipline of
+not patching mid-gameweek. Two separate
 changes are needed and both need out-of-sample validation:
   1. blend current-season start rate with the prior-season rate, weighted by
      current-season appearances (a Beta prior, as defcon_model already does),

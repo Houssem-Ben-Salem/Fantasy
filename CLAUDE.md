@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 An autonomous Fantasy Premier League analyst: data pipeline → SQLite → expected-points
-model → MILP squad optimiser → MCP server exposing 12 tools to Claude. Python 3.10+
+model → MILP squad optimiser → MCP server exposing 11 tools to Claude. Python 3.10+
 (CI pins 3.12). No packaging config — run everything as `python -m fplbrain.<module>`
 from the repo root.
 
@@ -27,7 +27,9 @@ Single test: `python -m pytest tests/test_constraints.py::test_budget -q`
 **`tests/test_constraints.py` is not hermetic** — it connects to a literal `data/fpl.db`
 and refits the full model in a module-scoped fixture, so run `make ingest` first or
 every test in it errors. `tests/test_sources_season_gating.py` is self-contained
-(monkeypatched HTTP, temp dirs) and runs anywhere. 21 tests total.
+(monkeypatched HTTP, temp dirs) and runs anywhere, as do the other newer test files
+(`test_minutes_model.py`, `test_goal_ridge.py`, `test_chip_xi.py`, `test_player_lookup.py`,
+`test_projection_freshness.py`, `test_validation_reporting.py`). 66 tests total.
 
 Underlying CLIs take more flags than the Makefile uses:
 
@@ -53,7 +55,7 @@ ingest.py      ETL + validation + cross-season crosswalk -> SQLite (schema.sql)
 models.py      Dixon-Coles goals | minutes | DefCon | attacking rates -> xP
 optimize.py    PuLP/CBC MILP: initial squad, transfer plan, chip valuation
 backtest.py    walk-forward eval with automatic leakage detection
-mcp_server.py  12 tools; imports models + optimize, never sources directly
+mcp_server.py  11 tools; imports models + optimize, never sources directly
 ```
 
 `scripts/refresh.py` is the orchestrator (ingest → project → persist → exit code).
@@ -100,6 +102,14 @@ historical season; keep that test passing.
 Cache writes record their true origin in a `.provenance` sidecar next to the CSV, so a
 mirror-sourced file can never be reported as `live` on a later read. Use `_write_cache`
 with its `path_label` rather than writing cache files directly.
+
+**The mirror can lag the live season by weeks** — in 2026-27 it published GW1 and nothing
+for three weeks. `ingest.fill_gameweeks_from_live()` fills finished gameweeks the mirror
+lacks from `event/{gw}/live/`. It runs *after* `load_gameweeks`, so the mirror stays
+preferred and wins as soon as it publishes; if the live API is down it fills nothing and
+the database keeps what the mirror had. Live rows are one per player per gameweek (a
+double gameweek gets one row of totals), and `value`/`selected`/transfers/`fpl_xp` stay
+NULL rather than being backfilled from today's snapshot, which would leak.
 
 ### Database contract (`schema.sql`)
 
@@ -183,6 +193,24 @@ at the top of `models.py` and are the single source of truth — `backtest.py` i
 Minutes is the weakest component and everything downstream inherits its error. Players
 with no history get `p_start = 0.35`, which is a guess.
 
+**`minutes_model` has one code path, not a pre-season/in-season branch.** The
+current-season window is blended with the previous season as a Beta prior worth
+`MINUTES_PRIOR_K = 0.75` matches; with no current-season games it reduces exactly to the
+prior. Do not reintroduce a switch on the first current-season row: that made every
+`p_start` exactly 0 or 1 after one gameweek and discarded last season (92% of players,
+85 misclassified). k is validated out-of-sample in `analysis/validate_minutes_prior.py`;
+change it only by re-running that, and `analysis/check_minutes_collapse.py` guards it.
+
+**Dixon-Coles team ratings are shrunk** with `GOAL_RIDGE_LAMBDA = 2.0`, and
+`fit_goal_model` rates every current-season team, so a promoted club with no results sits
+at league average instead of `expected_goals`' weakest-observed fallback. Without the
+penalty a thin club's rating walks to the ±3 bound, and the optimiser then *hunts* it —
+four £4.0m Hull defenders once projected above Haaland. The bound disguises divergence
+rather than preventing it. Known cost, recorded in the constant's comment: this form
+lowers league-wide predicted goals as λ grows, so re-check level bias before raising it.
+Validated in `analysis/validate_goal_ridge.py`; guarded by
+`analysis/check_team_rating_bounds.py`.
+
 ## Optimiser conventions (`optimize.py`)
 
 Constants at the top encode the FPL rules (`SQUAD_LIMITS`, `XI_MIN`/`XI_MAX`,
@@ -194,6 +222,14 @@ setting it to 0 produces the fragile 4.0m non-playing bench) and `min_bench_star
 (every squad member must be a usable substitute). `transfer_plan()` prices each transfer
 beyond the free ones at −4 inside the objective and lets the solver decide, so "is this
 hit worth it" is answered against the true alternative of rolling.
+
+**Any per-gameweek XI must come from `best_legal_xi()`, never `head(11)` by points.**
+The top 11 by points is not generally fieldable — it produced XIs with no goalkeeper,
+who was then counted on the bench, corrupting `bench_boost_gain`. `best_legal_xi` is
+exact (best of the eight legal formations, top-n within each position). The MILP entry
+points already choose formation correctly via `XI_MIN`/`XI_MAX`; they commit to one XI
+for the whole horizon, which measured at only +0.48 xP over five weeks on a real squad —
+conditional on fixture diversity, so re-check around doubles and blanks.
 
 ## MCP server conventions (`mcp_server.py`)
 

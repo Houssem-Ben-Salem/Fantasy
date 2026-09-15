@@ -63,6 +63,11 @@ models.DixonColes.fit and is a modelling change (shrink team ratings toward zero
 by match count, or a hierarchical prior), which LIMITATIONS.md §5 says should be
 validated out-of-sample before adoption, not shipped mid-gameweek.
 
+FIXED 2026-09-15 in 79e4712 (GOAL_RIDGE_LAMBDA=2.0, validated out-of-sample, plus
+rating every current-season team so zero-match clubs sit at the prior). Both TODOs
+below are therefore DONE. The guard is RETAINED, because removing the penalty or
+setting ridge=0 reintroduces the defect silently.
+
 Until then this is a GUARD: it fails loudly when any rating is at the bound, so
 a projection built on one is never read as an estimate.
 

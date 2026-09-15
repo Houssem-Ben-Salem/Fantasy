@@ -44,7 +44,9 @@ moves it. And bench_boost_gain is exactly the number the agent compares against
 a ~15-point threshold, so a systematic error in it is an error in a chip
 decision, not a rounding difference.
 
-NOT FIXED HERE. Per the session ground rule fplbrain/ is unmodified. The fix is
+FIXED 2026-09-15 in 2d412c6 (optimize.best_legal_xi). This guard now audits the
+package's evaluate_chips directly rather than a replica of the old logic. Originally
+it said: NOT FIXED HERE. Per the session ground rule fplbrain/ is unmodified. The fix is
 to reuse the same legal-XI selection the MILP already implements rather than
 head(11); it is a small change but it alters chip_advice output, and
 LIMITATIONS.md is a record of changes that looked obviously right and failed

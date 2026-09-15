@@ -11,6 +11,83 @@ produces its numbers; run it from the repo root against a built `data/fpl.db`.
 | §4 | `python analysis/exp2_optimiser.py` |
 | §5 | `python analysis/exp3b_power.py` (single window: `exp3_robust.py`) |
 | Tier 1 baseline | `python -m analysis.baselines` |
+| minutes prior | `python analysis/validate_minutes_prior.py` |
+| goal-model ridge | `python analysis/validate_goal_ridge.py [--stage2]` |
+
+---
+
+## 0. Changes since this document was written — read first
+
+**2026-09-15: three defects fixed, each validated out-of-sample before shipping.**
+Numbers below §0 were produced before these fixes unless marked. Where a fix
+moved a headline figure, it is recorded here rather than silently overwritten.
+
+| fix | commit | out-of-sample evidence |
+|---|---|---|
+| Minutes: in-season `p_start` collapsed to exactly 0/1, and `player_gw` was stuck on GW1 | `87eac4d` | Brier **+6.5%** on 2025-26 (7/7 weeks), **+10.9%** on 2026-27 with k frozen (3/3) |
+| Dixon-Coles: ratings pinned at the ±3 bound on thin promoted clubs | `79e4712` | held-out LL +0.048 (6/8 clean weeks) and +0.053; CS correlation with Pinnacle **0.563 → 0.792** |
+| `evaluate_chips` valued an unfieldable XI (top 11 by points) | `2d412c6` | exact; `bench_boost_gain` understated by up to 0.56 where illegal |
+
+**Re-run after the fixes — headline claims that held:** the ceiling analysis
+(§1–2) is unchanged to three decimals: 41.2% of achievable signal captured,
+minutes still the largest gap at +0.2105. The 2025-26 backtest is unharmed
+(Spearman 0.3261 → 0.3263). DefCon calibration (§3) is identical, as it must be —
+DefCon does not use the goal model.
+
+### The minutes collapse is §2's warning realised
+
+§2 says minutes is 47% of the addressable gap. From 3 Sep to 15 Sep every live
+projection's `p_start` was "did he play 60+ minutes in GW1": `minutes_model`
+switched from prior-seasons-only to current-season-only on the first
+current-season row, with no prior, while the mirror published GW1 and nothing
+after. 92% of players sat at exactly 0 or 1; 85 were provably misclassified.
+Same defect class as the pinned ratings — an unshrunk small-sample estimate —
+in the most important component. It was caught only because a user transfer
+produced a verdict (Semenyo 3.79 xP vs Cherki 1.13) that did not survive a look
+at Cherki's minutes.
+
+### Retraction: the clean-sheet over-dispersion finding roughly halves
+
+An earlier version of §3 said clean sheets were mildly over-dispersed (β = 0.844),
+and a later session cited our wider-than-market clean-sheet spread as
+**independent corroboration** of that. Both need correcting, and the second
+correction goes further than first drafted.
+
+1. **The market-spread corroboration is withdrawn.** It was measuring the pinned
+   COV/HUL ratings, not a modelling choice. Excluding those fixtures our spread
+   was already 0.096 against the market's 0.082.
+
+2. **β itself was partly the same defect.** The first draft of this retraction
+   argued β = 0.844 "stands on its own evidence", since it was fitted on
+   full-season 2025-26 data where no club had two matches. Measured, that is
+   wrong. Refitting the identical backtest with only the ridge changed:
+
+   | clean sheets | raw MLE | ridge λ=2 |
+   |---|---|---|
+   | calibration slope β | 0.844 | **0.926** |
+   | gap to perfect calibration | 0.156 | **0.074** |
+   | Var(p) / debiased Var(π) | 0.00991 / 0.0087 | 0.00891 / 0.00941 |
+   | Brier | 0.1891 | 0.1884 |
+
+   **53% of the over-dispersion came from the unregularised fit** — not only
+   via clubs at the bound, but because raw MLE over-disperses every rating a
+   little, reading noise as signal, even with a full season of data.
+
+   What survives is a small residual, and at that size the two estimators no
+   longer agree on its sign: β = 0.926 < 1 says slightly over-dispersed, while
+   debiased Var(π) > Var(p) says slightly under. Treat clean-sheet calibration as
+   close to correct, with no reliable direction. §3's table below still shows the
+   pre-ridge figures.
+
+### A measured null that is conditional, not settled
+
+The optimiser commits to one XI for the whole horizon rather than re-picking
+weekly. Measured on the 2026-27 squad, weekly re-selection was worth only
+**+0.48 xP over GW3–7**, because 3-5-2 was optimal in all five weeks. That is a
+statement about that squad's fixture diversity, not about the simplification.
+**Re-run `analysis/check_chip_xi_legality.py`'s weekly comparison whenever the
+squad's players' fixtures diverge** — around a double or blank gameweek, or after
+a wildcard that mixes easy and hard runs.
 
 ---
 
@@ -119,7 +196,7 @@ inflates resolution and reproduces the identical class of error one level up.
 | our Brier | 0.1891 | 0.1410 |
 | naive read | 3.4% better | 13.8% better |
 | `floor(Var(p)) − BS` | −0.0033 | **+0.0068**, 95% CI (0.0043, 0.0093) |
-| calibration slope β | 0.844 | **1.239** |
+| calibration slope β | 0.844 *(0.926 after ridge — see §0)* | **1.239** |
 | Var(p), circular | 0.00991 | 0.01582 |
 | Var(π), debiased | 0.00870 | 0.02348 |
 | **captured** | ≤ **75.8%** | ≤ **96.3%** |
@@ -212,7 +289,8 @@ realised, raw                       sd 0.099
 ```
 
 So the model's spread (0.072) is *wider* than reality's (0.061): clean sheets are
-mildly **over**-dispersed, which is exactly what `β = 0.844 < 1` says. The two
+mildly **over**-dispersed, which is exactly what `β = 0.844 < 1` says. *(Since
+corrected: 53% of that was the unregularised goal model — see §0.)* The two
 measurements agree once the noise correction is right. §4's correlation finding
 turns out to bite §3's dispersion check.
 
