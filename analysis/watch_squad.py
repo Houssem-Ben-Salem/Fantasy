@@ -88,15 +88,23 @@ LOG = ROOT / "analysis" / "squad_watch.log"
 SEASON = "2026-27"
 HIST = ["2024-25", "2025-26"]
 
-# Pinned by ELEMENT ID, never by name. Two players are called Palmer in 2026-27
-# (Cole Palmer CHE 154, and the Ipswich keeper 301), so a name-keyed watchlist
-# would silently watch the wrong one.
-SQUAD = {
-    1: "Raya", 388: "Guéhi", 229: "Tarkowski", 200: "Lacroix", 445: "Thiaw",
-    426: "B.Fernandes", 427: "Mbeumo", 154: "Palmer (CHE)", 155: "Enzo",
-    397: "Semenyo", 223: "Mateta",
-    301: "Palmer (IPS)", 233: "Mykolenko", 346: "Calvert-Lewin", 321: "Walle Egeli",
-}
+# The squad is read from the latest saved squad_state, NOT hardcoded.
+#
+# It used to be a hardcoded dict of element ids, written in GW1 and never updated.
+# Three transfers later it was still watching Enzo, Semenyo and Mateta — none owned
+# any more, Mateta injured, so it would have alarmed daily about a player already
+# sold — while ignoring Szoboszlai, Wissa and Cherki, who were. Three of fifteen
+# wrong. A sensor pointed at the wrong squad is worse than none: it reports "clean"
+# about the wrong fifteen. Element ids are still what is compared, never names
+# (two players are called Palmer in 2026-27).
+def load_squad(conn) -> dict[int, str]:
+    import json
+    row = pd.read_sql("SELECT gw, squad FROM squad_state ORDER BY gw DESC LIMIT 1", conn)
+    if row.empty:
+        raise RuntimeError("no saved squad_state — call save_state before relying on this monitor")
+    squad = json.loads(row.iloc[0]["squad"])
+    return {int(pl["element"]): str(pl.get("name", pl["element"])) for pl in squad}
+
 
 # If the league-wide flagged count falls below this, suspect the feed rather than
 # a miraculously healthy division. Baseline measured 2026-08-18 was 103.
@@ -152,6 +160,7 @@ def main() -> int:
 
     try:
         with sqlite3.connect(a.db) as conn:
+            SQUAD = load_squad(conn)
             ids = ",".join(str(i) for i in SQUAD)
             squad = pd.read_sql(
                 f"""SELECT element, web_name, status, chance_next_round, news
