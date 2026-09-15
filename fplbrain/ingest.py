@@ -245,6 +245,91 @@ def load_gameweeks(conn: sqlite3.Connection, season: str) -> str:
     return f.path
 
 
+def fill_gameweeks_from_live(conn: sqlite3.Connection, season: str) -> list[int]:
+    """
+    Fill finished gameweeks the community mirror has not published yet, from the
+    live API. Returns the gameweeks filled.
+
+    WHY. player_gw was filled only from the mirror's merged_gw.csv. In 2026-27
+    the mirror published GW1 and then nothing for three weeks, so every refresh
+    rebuilt minutes from one stale match while GW2-4 were played. The live API's
+    event/{gw}/live/ has those gameweeks; nothing was writing them.
+
+    SHAPE. The mirror stays preferred: load_gameweeks() runs first and this only
+    covers gameweeks it lacks, so the moment the mirror publishes a gameweek the
+    next ingest takes it from there instead. If the live API is unreachable this
+    fills nothing and the database keeps what the mirror had — stale but correct.
+    That keeps the fallback chain's rule of never depending on the live path.
+
+    FIDELITY. Live stats are gameweek totals, so one row is written per player
+    per gameweek, keyed to the player's team fixture. For a double gameweek that
+    means one row carrying both matches' totals, where the mirror would have two;
+    start-rate arithmetic treats it as one appearance. value, selected,
+    transfers_in/out and fpl_xp are not in the live payload and stay NULL rather
+    than being backfilled from today's snapshot, which would leak.
+    """
+    finished = pd.read_sql(
+        "SELECT DISTINCT gw FROM fixtures WHERE season=? AND finished=1 AND gw IS NOT NULL",
+        conn, params=(season,))["gw"].astype(int).tolist()
+    loaded = pd.read_sql(
+        "SELECT DISTINCT gw FROM player_gw WHERE season=?", conn, params=(season,)
+    )["gw"].astype(int).tolist()
+    missing = sorted(set(finished) - set(loaded))
+    if not missing:
+        return []
+
+    players = pd.read_sql(
+        "SELECT element, code, team_id FROM players WHERE season=?", conn, params=(season,))
+    fx = pd.read_sql(
+        """SELECT fixture_id, gw, home_team, away_team, kickoff_time
+           FROM fixtures WHERE season=?""", conn, params=(season,))
+
+    stat_cols = ["minutes", "starts", "total_points", "goals_scored", "assists",
+                 "clean_sheets", "goals_conceded", "own_goals", "penalties_saved",
+                 "penalties_missed", "yellow_cards", "red_cards", "saves", "bonus", "bps",
+                 "tackles", "recoveries", "clearances_blocks_interceptions",
+                 "defensive_contribution", "expected_goals", "expected_assists",
+                 "expected_goal_involvements", "expected_goals_conceded",
+                 "influence", "creativity", "threat", "ict_index"]
+    filled = []
+    for gw in missing:
+        f = sources.live_gameweek(gw)
+        if f is None:
+            log.warning("GW%s finished but not in the mirror, and live API unavailable "
+                        "— left missing", gw)
+            continue
+        gfx = fx[fx.gw == gw]
+        rows = []
+        for e in f.data.get("elements", []):
+            pl = players[players.element == e["id"]]
+            if pl.empty:
+                continue
+            team = int(pl.iloc[0].team_id)
+            mine = gfx[(gfx.home_team == team) | (gfx.away_team == team)]
+            if mine.empty:          # blank gameweek for this team: no appearance to record
+                continue
+            m = mine.iloc[0]
+            st = e.get("stats", {})
+            row = {"season": season, "element": int(e["id"]), "code": int(pl.iloc[0].code),
+                   "gw": gw, "fixture_id": int(m.fixture_id),
+                   "opponent_team": int(m.away_team if m.home_team == team else m.home_team),
+                   "was_home": int(m.home_team == team), "kickoff_time": m.kickoff_time,
+                   "value": None, "selected": None, "transfers_in": None,
+                   "transfers_out": None, "fpl_xp": None}
+            for col in stat_cols:
+                v = st.get(col)
+                row[col] = pd.to_numeric(v, errors="coerce") if v is not None else None
+            rows.append(row)
+        if not rows:
+            continue
+        pd.DataFrame(rows).to_sql("player_gw", conn, if_exists="append", index=False)
+        conn.commit()
+        filled.append(gw)
+        log.info("player_gw %s GW%s: %d rows filled from live API (mirror lagging)",
+                 season, gw, len(rows))
+    return filled
+
+
 def build_crosswalk(conn: sqlite3.Connection, hist_season: str, cur_season: str) -> dict:
     """
     Map historical players onto current-season elements.
@@ -506,6 +591,15 @@ def run(db_path: str, current: str = CURRENT_SEASON, history: list[str] | None =
     except Exception:  # noqa: BLE001
         log.info("no gameweek data yet for %s (season not started)", current)
         provenance[f"gw_{current}"] = "none (season not started)"
+
+    # The mirror can lag the live season by weeks. Fill finished gameweeks it has
+    # not published from the live API, so minutes are not inferred from a stale
+    # subset of the season. See fill_gameweeks_from_live.
+    try:
+        provenance[f"gw_{current}_live_fill"] = fill_gameweeks_from_live(conn, current)
+    except Exception as e:  # noqa: BLE001
+        log.error("live gameweek fill failed: %s", e)
+        provenance[f"gw_{current}_live_fill"] = f"FAILED: {e}"
 
     reports = {s: validate(conn, s) for s in history}
     crosswalks = {s: build_crosswalk(conn, s, current) for s in history}

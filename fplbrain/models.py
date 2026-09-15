@@ -189,65 +189,100 @@ def reconstruct_results_from_gw(conn: sqlite3.Connection, season: str) -> pd.Dat
 # ------------------------------------------------------------------ 2. minutes
 
 
+# Strength of the prior-season start rate, in equivalent matches. Validated
+# out-of-sample in analysis/validate_minutes_prior.py: chosen on 2025-26 GW2-8 by
+# a rule fixed before the fine sweep (minimise Brier, must also beat no-prior on
+# log-loss), then confirmed on 2026-27 GW2-4 with k frozen. Squad-relevant Brier
+# improved 6.5% on the tuning season and 10.9% on the confirmation season, winning
+# every target gameweek on both metrics. The optimum is flat across 0.5-1.0.
+MINUTES_PRIOR_K = 0.75
+
+
 def minutes_model(conn: sqlite3.Connection, season: str, as_of_gw: int | None = None,
                   lookback: int = 6) -> pd.DataFrame:
     """
     P(start) and expected minutes.
 
-    Blends recent starts with season-long rate, then applies the availability
-    multiplier from FPL's own `status` / `chance_of_playing_next_round`.
-    Pre-season (no gameweeks yet) falls back to last season's usage.
+    One path for pre-season and in-season: the current-season window is blended
+    with the previous season's rate as a Beta prior worth MINUTES_PRIOR_K matches,
+
+        start_rate  = (starts_in_window + k * prior_rate)    / (games_in_window + k)
+        avg_minutes = (minutes_in_window + k * prior_minutes) / (games_in_window + k)
+
+    With no current-season games this reduces exactly to the prior. Then the
+    availability multiplier from FPL's `status` / `chance_of_playing_next_round`.
+
+    WHY NOT A BRANCH. This used to switch from prior-seasons-only to
+    current-season-only on the first current-season row. With one gameweek loaded
+    that made every start_rate exactly 0.0 or 1.0 and discarded all of last
+    season: 92% of players at exactly 0 or 1, 85 provably misclassified against
+    GW2-4 minutes (Cherki at 0.0 after 81 and 65 minutes; Senesi at 1.0 with none).
+    Same defect class as an unshrunk Dixon-Coles rating. Do not reintroduce the
+    switch — analysis/check_minutes_collapse.py guards against it.
+
+    The prior is the most recent previous season with gameweek data, which is
+    what was validated. Players with no history there fall back to 0.35 / 35
+    minutes, the long-standing guess for new signings and promoted players.
     """
+    k = MINUTES_PRIOR_K
+    base = pd.read_sql(
+        "SELECT element, code, position, status, chance_next_round FROM players WHERE season=?",
+        conn, params=(season,),
+    )
+
+    prev = pd.read_sql(
+        "SELECT DISTINCT season FROM player_gw WHERE season < ? ORDER BY season DESC LIMIT 1",
+        conn, params=(season,),
+    )
+    if len(prev):
+        prior = pd.read_sql(
+            """SELECT p_cur.element,
+                      AVG(CASE WHEN g.minutes>=60 THEN 1.0 ELSE 0.0 END) AS prior_rate,
+                      AVG(g.minutes) AS prior_minutes
+               FROM players p_cur
+               JOIN players p_hist ON p_hist.code = p_cur.code AND p_hist.season = ?
+               JOIN player_gw g ON g.season = p_hist.season AND g.element = p_hist.element
+               WHERE p_cur.season = ?
+               GROUP BY p_cur.element""",
+            conn, params=(prev.iloc[0]["season"], season),
+        )
+    else:
+        prior = pd.DataFrame(columns=["element", "prior_rate", "prior_minutes"])
+
     gws = pd.read_sql(
         "SELECT DISTINCT gw FROM player_gw WHERE season=? ORDER BY gw", conn, params=(season,)
     )["gw"].tolist()
-
-    if not gws:  # season not started
-        hist = pd.read_sql(
-            """SELECT p_cur.element, p_cur.code, p_cur.position,
-                      AVG(CASE WHEN g.minutes>=60 THEN 1.0 ELSE 0.0 END) AS start_rate,
-                      AVG(g.minutes) AS avg_minutes, COUNT(*) AS apps
-               FROM players p_cur
-               JOIN players p_hist ON p_hist.code = p_cur.code AND p_hist.season != p_cur.season
-               JOIN player_gw g ON g.season=p_hist.season AND g.element=p_hist.element
-               WHERE p_cur.season = ?
-               GROUP BY p_cur.element""",
-            conn, params=(season,),
-        )
-        base = pd.read_sql(
-            "SELECT element, code, position, status, chance_next_round FROM players WHERE season=?",
-            conn, params=(season,),
-        )
-        out = base.merge(hist[["element", "start_rate", "avg_minutes", "apps"]],
-                         on="element", how="left")
-        # New signings / promoted-club players have no history: assume rotation risk.
-        out["start_rate"] = out["start_rate"].fillna(0.35)
-        out["avg_minutes"] = out["avg_minutes"].fillna(35.0)
-        out["apps"] = out["apps"].fillna(0)
-    else:
+    if gws:
         cutoff = as_of_gw if as_of_gw is not None else max(gws)
-        recent = pd.read_sql(
-            """SELECT element, code,
-                      AVG(CASE WHEN minutes>=60 THEN 1.0 ELSE 0.0 END) AS start_rate,
-                      AVG(minutes) AS avg_minutes, COUNT(*) AS apps
-               FROM player_gw WHERE season=? AND gw> ? AND gw<=?
+        window = pd.read_sql(
+            """SELECT element,
+                      SUM(CASE WHEN minutes>=60 THEN 1 ELSE 0 END) AS s,
+                      COUNT(*) AS n,
+                      SUM(minutes) AS mins
+               FROM player_gw WHERE season=? AND gw > ? AND gw <= ?
                GROUP BY element""",
             conn, params=(season, cutoff - lookback, cutoff),
         )
-        base = pd.read_sql(
-            "SELECT element, code, position, status, chance_next_round FROM players WHERE season=?",
-            conn, params=(season,),
-        )
-        out = base.merge(recent, on="element", how="left", suffixes=("", "_r"))
-        out["start_rate"] = out["start_rate"].fillna(0.25)
-        out["avg_minutes"] = out["avg_minutes"].fillna(20.0)
-        out["apps"] = out["apps"].fillna(0)
+    else:
+        window = pd.DataFrame(columns=["element", "s", "n", "mins"])
+
+    out = base.merge(prior, on="element", how="left").merge(window, on="element", how="left")
+    for c in ("s", "n", "mins"):
+        out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0.0)
+    r0 = pd.to_numeric(out["prior_rate"], errors="coerce").fillna(0.35)
+    m0 = pd.to_numeric(out["prior_minutes"], errors="coerce").fillna(35.0)
+    out["start_rate"] = (out["s"] + k * r0) / (out["n"] + k)
+    out["avg_minutes"] = (out["mins"] + k * m0) / (out["n"] + k)
+    out["apps"] = out["n"]
 
     # Availability multiplier. `status`: a=available, d=doubtful, i=injured,
     # s=suspended, u=unavailable, n=not in squad.
     status_mult = out["status"].map({"a": 1.0, "d": 0.5, "i": 0.0,
                                      "s": 0.0, "u": 0.0, "n": 0.0}).fillna(1.0)
-    chance = out["chance_next_round"]
+    # to_numeric matters: in pre-season FPL leaves this column entirely empty, which
+    # pandas reads as object dtype, and that silently turned p_start into an object
+    # array. Harmless to arithmetic, fatal to anything that takes a log of it.
+    chance = pd.to_numeric(out["chance_next_round"], errors="coerce")
     chance_mult = np.where(chance.notna(), chance.fillna(100) / 100.0, 1.0)
     avail = np.minimum(status_mult, chance_mult)
 
