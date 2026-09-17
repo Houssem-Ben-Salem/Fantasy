@@ -110,6 +110,46 @@ statement about that squad's fixture diversity, not about the simplification.
 squad's players' fixtures diverge** — around a double or blank gameweek, or after
 a wildcard that mixes easy and hard runs.
 
+### The ridge shrinks toward the wrong TARGET for promoted clubs
+
+`GOAL_RIDGE_LAMBDA` fixed the *variance* of a thin club's rating — nothing
+diverges to the ±3 bound any more. It did not fix the *centre*. Shrinking toward
+zero means shrinking toward league average, and a promoted club's honest prior is
+worse than average. Four matches can therefore still carry a promoted side to a
+top-of-table rating, which is what 2026-27 HUL did: **defence −0.305 on four
+matches, second-best in a 25-team table**, on a record of 2 conceded in 4.
+
+Measured on the only promoted cohort the database holds (2025-26 BUR/LEE/SUN),
+the rating after 4 matches vs the full season moved **+0.174 for promoted clubs
+and −0.003 for the other 17** — all three the same way, SUN going from
+better-than-average to below it. n=3, sign test p=0.25: **this establishes a
+direction and a mechanism, not an effect.** `analysis/check_promoted_prior.py`.
+
+**It is not the explanation for the fixture that exposed it.** GW5 2026-27 had
+NEW at home to HUL at 1.07 xG against Pinnacle's 2.02. The measured +0.174 buys
+0.20 of that, the league-wide level shortfall below buys 0.17, and **0.57 — 60%
+of the gap — is unexplained.** Recorded because the pull to close a gap with the
+nearest available bias is exactly how §3's clean-sheet claim went wrong.
+
+Not fixed: a nonzero shrinkage target moves every rating in the table and needs
+`validate_goal_ridge.py`'s two-stage out-of-sample treatment, which does not fit
+between finding it and a deadline.
+
+### The model runs ~0.35 goals/match below the market, and 4 GWs cannot judge it
+
+GW5 2026-27, all 20 team-fixtures against Pinnacle: **xG correlation 0.780, CS
+correlation 0.817**, our CS spread 0.118 against the market's 0.106. The CS
+figures are the ridge fix showing up against an outside benchmark — the same
+comparison in GW3 needed COV and HUL excluded to reach 0.888, and this one
+excludes nothing.
+
+The level is the open question. We project **2.68 goals/match, Pinnacle 3.03,
+realised 2.85** across 40 matches. With a per-match sd of 1.83 the SE on that
+realised figure is 0.29, so **both sit inside the 95% interval [2.28, 3.42]** —
+0.6 SE either side. A season of results cannot yet say which is closer, and the
+ridge's known level cost (−1.5% at λ=2) accounts for only about 0.04 of the 0.35.
+Re-run this each gameweek and let the CI narrow rather than acting on one week.
+
 ---
 
 ## 1. The headline number was being read wrong
