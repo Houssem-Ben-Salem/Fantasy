@@ -52,9 +52,13 @@ three times; new information is the input class that can still add value.
 - Read what it found with `news_for()` (your squad) and
   `news_for(squad_only=False)` (targets too). Present claims as CONFIRMED or
   RUMOURED, with source and date.
-- Check last gameweek's minutes for the 15 (`run_sql` on `player_gw`). A
-  starter who went off early is an injury signal before any flag appears —
-  Gibbs-White and Tarkowski both left after ~15 minutes in GW6 with no flag.
+- Check last gameweek's minutes for the 15. A starter who went off early can
+  be an injury signal before any flag appears — but **only read minutes from a
+  finished match** (`player_gw` holds finished gameweeks; from the live API,
+  require the fixture's `finished_provisional`). On 11 Oct 2026 live minutes
+  read 15 minutes into two 13:00 kickoffs were taken for early substitutions of
+  Gibbs-White and Tarkowski, who then played 90; a day of injury scenarios was
+  built on it.
 - Fixture congestion (European and cup midweeks) is not in the model. Name it
   where it applies; never adjust numbers for it by feel.
 - Claims shape the scenarios below and nothing else: they do not change the

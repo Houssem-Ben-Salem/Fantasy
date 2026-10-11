@@ -29,8 +29,10 @@ team-fixtures:
   promoted clubs have been the standing disagreement)
 
 Once the gameweek is played, score both forecasts on the results (Poisson
-log-likelihood). Two weeks so far were dead heats; do not claim an edge from a
-handful of matches.
+log-likelihood) — finished matches only: from the live API, require the
+fixture's `finished_provisional`, never a score read mid-match. So far GW5 was a
+dead heat and GW6 went to Pinnacle (by 1.59 on the goals-only ratings, 0.51 on
+the xG-weighted ones); do not claim an edge either way from a handful of matches.
 
 ## 2. Press-conference quotes and injury news for the user's 15
 

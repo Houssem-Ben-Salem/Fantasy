@@ -56,9 +56,16 @@ Brier 0.1968 -> 0.1949. `check_promoted_prior.py` still measures the goals-only
 direction it was written for; the shrinkage-target question it raised is now
 largely moot, because the evidence fixed it before the prior had to.
 
-*Versus the market, on outcomes:* GW5 log-lik -33.75 ours vs -33.81 Pinnacle; GW6
-(8 of 10 played) -21.81 vs -21.91. Two dead heats over 18 matches — parity at most,
-not an edge. The standing disagreements are the promoted clubs (GW6: EVE at HUL,
+*Versus the market, on outcomes:* GW5 log-lik -33.75 ours vs -33.81 Pinnacle, a dead
+heat. GW6, on the 8 matches finished (`finished_provisional`): -24.90 vs -23.31 with
+the goals-only ratings of the day — **Pinnacle ahead by 1.59**; the xG-weighted ratings
+since adopted narrow it to -0.51. Over 18 matches the market leads, by a noise-sized
+margin. *Correction:* this paragraph first reported GW6 as a second dead heat
+(-21.81 vs -21.91). Two of its "results" were scores read 15 minutes into the 13:00
+kickoffs (0-1 and 0-0; they finished 3-1 and 2-2) — the same misreading of live,
+unfinished data that turned Gibbs-White's and Tarkowski's 90-minute games into
+"early substitutions" that day. Live data now counts only once a fixture is
+`finished_provisional`. The standing disagreements are the promoted clubs (GW6: EVE at HUL,
 Pinnacle 1.52 vs ours 0.76). HUL's defence rating moved -0.305 -> -0.201 after one
 more match, the direction `check_promoted_prior.py` predicted. Hull have conceded 4
 against 7.40 xGA: the rating is fitted on goals, and goals flatter them.
