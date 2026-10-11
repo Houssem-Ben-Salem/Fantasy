@@ -110,3 +110,52 @@ def test_a_preview_issue_is_never_mistaken_for_the_real_brief():
     assert dw.preview_title(7) != dw.title(7)
     assert _do(dw.decide(NOW, 7, DL, [test_issue])) == ["brief"]
     assert "close" not in _do(dw.decide(NOW, 7, DL, [{**test_issue, "state": "OPEN"}]))
+
+
+# ------------------------------------------------------------ delivery: reach the owner directly
+
+import subprocess  # noqa: E402
+
+import gh_issues  # noqa: E402
+
+
+def _record(monkeypatch, fail_first=False):
+    calls = []
+
+    def fake(*args):
+        calls.append(args)
+        if fail_first and len(calls) == 1:
+            raise subprocess.CalledProcessError(1, ["gh", *args])
+        return "https://github.com/o/r/issues/7\n"
+
+    monkeypatch.setattr(gh_issues, "_gh", fake)
+    return calls
+
+
+def test_alerts_are_assigned_to_and_mention_the_owner(monkeypatch):
+    """Issue #1 (11 Oct 2026) was posted by the workflow bot and never reached
+    the owner's inbox: GitHub emails bot-created issues only to people watching
+    the repository with email on. Assignment and an @-mention are direct
+    "participating" notifications, which GitHub emails by default."""
+    monkeypatch.setenv("GITHUB_REPOSITORY_OWNER", "someone")
+    calls = _record(monkeypatch)
+    gh_issues.create("[fplbrain] t", "body")
+    args = calls[0]
+    assert args[args.index("--assignee") + 1] == "someone"
+    assert "@someone" in args[args.index("--body") + 1]
+    gh_issues.comment(7, "final call")
+    assert "@someone" in calls[1][calls[1].index("--body") + 1]
+
+
+def test_a_refused_assignment_still_posts_the_alert(monkeypatch):
+    monkeypatch.setenv("GITHUB_REPOSITORY_OWNER", "someone")
+    calls = _record(monkeypatch, fail_first=True)
+    assert gh_issues.create("[fplbrain] t", "body").endswith("/7")
+    assert "--assignee" not in calls[1] and "@someone" in calls[1][calls[1].index("--body") + 1]
+
+
+def test_outside_actions_nobody_is_mentioned(monkeypatch):
+    monkeypatch.delenv("GITHUB_REPOSITORY_OWNER", raising=False)
+    calls = _record(monkeypatch)
+    gh_issues.create("[fplbrain] t", "body")
+    assert "--assignee" not in calls[0] and "@" not in calls[0][calls[0].index("--body") + 1]
