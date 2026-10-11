@@ -149,3 +149,19 @@ def test_wilson_interval():
     assert news.wilson(0, 0) == (0.0, 1.0)
     lo, hi = news.wilson(10, 10)
     assert 0.69 < lo < 0.73 and hi == pytest.approx(1.0)
+
+
+def test_in_a_tie_the_most_authoritative_claim_counts(db):
+    """Found on the first real run (11 Oct 2026): Mykolenko's official 75% flag and
+    a journalist's report were logged in one batch, tied on recorded_at, and the
+    tie went to the rumour — dropping the confirmed source and its chance, the
+    only part of a 'doubtful' claim that can be scored."""
+    t = DEADLINES[6] - timedelta(hours=3)
+    flag = {**_claim(claim="doubtful", chance=75, confidence="confirmed", source_type="fpl_flag",
+                     source_url=""), "element": 14, "player": "Injured"}
+    rumour = {**_claim(claim="doubtful"), "element": 14, "player": "Injured"}
+    with sqlite3.connect(db) as c:
+        news.record(c, S, [flag, rumour], now=t)            # the rumour is inserted last
+        row = news.latest(c, S, 6).set_index("element").loc[14]
+        assert (row["confidence"], row["chance"]) == ("confirmed", 75)
+        assert news.score(c, S, DEADLINES)["doubtful"]["n"] == 1   # scoreable: it has a chance

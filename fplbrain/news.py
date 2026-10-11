@@ -112,11 +112,25 @@ def record(conn: sqlite3.Connection, season: str, claims: list[dict],
     return ids
 
 
+def _pick(d: pd.DataFrame) -> pd.DataFrame:
+    """The claim that counts per player: the latest; among claims logged at the
+    same moment, the most authoritative — confirmed over rumoured, then one with
+    a stated chance (the only scoreable part of a 'doubtful'). Found on the first
+    real run: a batch put Mykolenko's 75% FPL flag and a journalist's report on
+    one timestamp, and the tie went to the rumour."""
+    if d.empty:
+        return d
+    return (d.assign(_conf=(d.confidence == "confirmed").astype(int),
+                     _chance=d.chance.notna().astype(int))
+             .sort_values(["recorded_at", "_conf", "_chance", "claim_id"])
+             .groupby("element").tail(1).drop(columns=["_conf", "_chance"]))
+
+
 def latest(conn: sqlite3.Connection, season: str, gw: int) -> pd.DataFrame:
-    """The most recent claim per player for a gameweek."""
+    """The claim that counts per player for a gameweek (see _pick)."""
     ensure(conn)
     d = pd.read_sql("SELECT * FROM news_claims WHERE season=? AND gw=?", conn, params=(season, gw))
-    return d.sort_values("recorded_at").groupby("element").tail(1).sort_values("player")
+    return _pick(d).sort_values("player")
 
 
 def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
@@ -145,7 +159,7 @@ def score(conn: sqlite3.Connection, season: str, deadlines: dict[int, datetime])
             continue
         now_ = acts[acts.gw == gw].set_index("element")
         prev = acts[acts.gw == gw - 1].set_index("element")
-        for r in c.sort_values("recorded_at").groupby("element").tail(1).itertuples():
+        for r in _pick(c).itertuples():
             mins = float(now_.mins.get(r.element, 0) or 0)
             started = int(now_.st.get(r.element, 0) or 0) == 1
             persist = int(prev.st.get(r.element, 0) or 0) == 1
@@ -164,8 +178,12 @@ def score(conn: sqlite3.Connection, season: str, deadlines: dict[int, datetime])
         return out
     scored = d[d.correct.notna()]
     by = scored.groupby("claim").correct.agg(n="size", correct="sum").reset_index()
-    by[["lo", "hi"]] = [wilson(int(k), int(n)) for k, n in zip(by.correct, by.n)]
-    by["hit"] = by.correct / by.n
+    # Built as a frame so an empty `by` works: a gameweek whose claims are all
+    # doubtful/available makes no start call, and list-assignment crashed on it.
+    ci = pd.DataFrame([wilson(int(k), int(n)) for k, n in zip(by.correct, by.n)],
+                      columns=["lo", "hi"], index=by.index)
+    by = pd.concat([by, ci], axis=1)
+    by["hit"] = (by.correct / by.n) if len(by) else pd.Series(dtype=float)
     out["by_claim"] = by[["claim", "n", "correct", "hit", "lo", "hi"]]
     dis = d[d.pred.notna() & (d.pred != d.persist)]
     k, n = int(dis.start_correct.sum()), len(dis)
