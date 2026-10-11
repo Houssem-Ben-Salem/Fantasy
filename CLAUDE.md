@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 An autonomous Fantasy Premier League analyst: data pipeline → SQLite → expected-points
-model → MILP squad optimiser → MCP server exposing 12 tools to Claude. Python 3.10+
+model → MILP squad optimiser → MCP server exposing 13 tools to Claude. Python 3.10+
 (CI pins 3.12). No packaging config — run everything as `python -m fplbrain.<module>`
 from the repo root.
 
@@ -30,7 +30,7 @@ every test in it errors. `tests/test_sources_season_gating.py` is self-contained
 (monkeypatched HTTP, temp dirs) and runs anywhere, as do the other newer test files
 (`test_minutes_model.py`, `test_goal_ridge.py`, `test_chip_xi.py`, `test_player_lookup.py`,
 `test_projection_freshness.py`, `test_validation_reporting.py`, `test_solver.py`, `test_attack_fixture.py`, `test_transfer_pairs.py`, `test_entry.py`,
-`test_mcp_state.py`). 96 tests total.
+`test_mcp_state.py`, `test_run_provenance.py`, `test_scorecard.py`). 100 tests total.
 
 Underlying CLIs take more flags than the Makefile uses:
 
@@ -61,7 +61,8 @@ models.py      Dixon-Coles goals | minutes | DefCon | attacking rates -> xP
 optimize.py    PuLP/CBC MILP: initial squad, transfer plan, chip valuation
 backtest.py    walk-forward eval with automatic leakage detection
 entry.py       a manager's real squad, bank, chips from the public FPL API
-mcp_server.py  12 tools; imports entry + models + optimize, never sources directly
+scorecard.py   prospective record: persisted pre-deadline runs vs what happened
+mcp_server.py  13 tools; imports entry/models/optimize/scorecard, never sources
 ```
 
 `scripts/refresh.py` is the orchestrator (ingest → project → persist → exit code).
@@ -289,6 +290,17 @@ labelled so: selling price (half of a rise kept, rounded down) and free transfer
 (replayed from history; Wildcard/Free Hit weeks keep saved ones). Hand-typed squads
 carried the wrong backup keeper for five weeks and a bank £0.6m too high. A sync
 keeps notes already saved for that gameweek — they are what decisions get scored by.
+
+**`scorecard.py` is the one test nothing here could be tuned to.** It scores only
+projections *persisted before* each deadline (local `runs`, and CI's Friday exports
+from git history) against what happened, next to a naive "points so far" baseline,
+with a bootstrap over (team, gameweek) clusters. `spearman_start` — among players
+who actually started — isolates the points model from minutes and is the open
+question: on GW1-5 2026-27 it is undecided, while the whole measured edge comes from
+predicting who plays. Every run records `code_version` and the model constants in
+`runs.provenance`, so a score can be attributed to the model that made it. Keep the
+deadline filter strict: `tests/test_scorecard.py` plants a perfect run made an hour
+after a deadline and fails if it is ever scored.
 
 **Planning starts at `models.next_gameweek()`**: the first gameweek whose deadline
 (first kickoff − 90 min) has not passed. "Lowest gameweek with an unfinished

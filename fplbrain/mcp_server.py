@@ -40,7 +40,7 @@ except ImportError:  # pragma: no cover
             'MCP SDK not found. Install with: pip install "mcp[cli]"'
         ) from exc
 
-from . import entry, models, optimize
+from . import entry, models, optimize, scorecard
 
 DB = os.environ.get("FPLBRAIN_DB", "data/fpl.db")
 SEASON = os.environ.get("FPLBRAIN_SEASON", "2026-27")
@@ -607,6 +607,31 @@ def load_state(gw: int = 0) -> str:
         else:
             df = pd.read_sql("SELECT * FROM squad_state ORDER BY gw DESC LIMIT 1", c)
     return _md(df) if not df.empty else "No saved state."
+
+
+@mcp.tool()
+def model_scorecard(last_n: int = 8, include_ci: bool = True) -> str:
+    """
+    How the projections persisted BEFORE each deadline did against what happened,
+    next to a naive "points so far" baseline — the weekly model review. Scored
+    only on runs that could not be changed after the fact (local refreshes, and
+    CI's Friday exports when include_ci). spearman_start, among players who
+    actually started, isolates the points model from minutes: it is the open
+    question, and the pooled interval says how far it is from being decided.
+    """
+    with _conn() as c:
+        t, pooled = scorecard.score(c, SEASON, include_ci=include_ci)
+    if t.empty:
+        return "No finished gameweek has a pre-deadline run yet."
+    cols = ["gw", "source", "run", "model", "n", "spearman_all", "naive_spearman_all",
+            "spearman_start", "naive_spearman_start", "brier", "naive_brier"]
+    recent = t[t.gw > t.gw.max() - last_n][cols].round(3)
+    return ("**Per gameweek** — the last run before each deadline\n\n"
+            + _md(recent, max_rows=2 * last_n)
+            + "\n\n**Pooled, model minus naive** — bootstrap over (team, gameweek)\n\n"
+            + _md(pooled.round(3), max_rows=20)
+            + "\n\nUntil spearman_start's interval excludes zero, the points model has not "
+              "been shown to beat 'points so far'; minutes carries spearman_all.")
 
 
 def _last_synced_entry() -> int:

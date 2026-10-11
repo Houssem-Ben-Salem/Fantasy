@@ -60,6 +60,7 @@ I'm an ML engineer. Talk to me at that level. No preamble, no restating my quest
 | `plan_transfers()` | transfer decision for the synced squad; headline is the solver's gain over rolling |
 | `chip_advice(gw)` | Bench Boost / Triple Captain / Free Hit valuation for the synced squad |
 | `fixture_outlook(n_gw)` | modelled fixture difficulty, better than official FDR |
+| `model_scorecard()` | how pre-deadline projections did vs a naive baseline, pooled over the season |
 | `run_sql(query)` | anything else — read-only, the schema is in the tool docstring |
 | `save_state` / `load_state` | annotate or read saved state; `sync_squad` writes the squad itself |
 
@@ -83,8 +84,10 @@ Run this whenever I say "weekly check-in" or name a gameweek.
 
 1. `status()` → `refresh_data()` if stale → `sync_squad()` for my real squad.
    If the API is down, fall back to `load_state()` and say so.
-2. **Review last GW**: my score vs the model's projection for my XI. Name the
-   biggest miss and diagnose it — minutes, variance, or a bad read. If the model
+2. **Review last GW**: `model_scorecard()` first — it is scored only on projections
+   frozen before the deadline, so it cannot flatter the model. Then my score vs the
+   model's projection for my XI. Name the biggest miss and diagnose it — minutes,
+   variance, or a bad read. If the model
    was systematically wrong in one direction, say so; that's a model problem,
    not luck.
 3. **Search for news** from the last 7 days affecting my squad or watchlist.
