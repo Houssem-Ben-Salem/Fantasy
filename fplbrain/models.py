@@ -112,6 +112,12 @@ GOAL_RIDGE_LAMBDA = 2.0
 # 2026-27 ratings (worst club -0.40%). Left in, because it is what was validated.
 ATTACK_FIXTURE_ALPHA = 0.75
 
+# Weight on chance quality when fitting team ratings: the fit maximises
+# (1 - w) * goals log-likelihood + w * quasi-Poisson log-likelihood of team xG
+# (summed from player_gw.expected_goals). 0 reproduces the goals-only model
+# exactly. Chosen out-of-sample in analysis/validate_xg_ratings.py.
+XG_WEIGHT = 0.0
+
 
 @dataclass
 class DixonColes:
@@ -128,6 +134,7 @@ class DixonColes:
     rho: float = 0.0
     fitted: bool = False
     ridge: float = GOAL_RIDGE_LAMBDA   # see GOAL_RIDGE_LAMBDA; 0 reproduces raw MLE
+    xg_weight: float = XG_WEIGHT      # see XG_WEIGHT; 0 is goals only
 
     @staticmethod
     def _tau(x, y, lh, la, rho):
@@ -144,7 +151,9 @@ class DixonColes:
 
     def fit(self, matches: pd.DataFrame, teams: list[str] | None = None) -> "DixonColes":
         """
-        matches: home_team, away_team, home_score, away_score, kickoff (datetime)
+        matches: home_team, away_team, home_score, away_score, kickoff (datetime),
+          optionally home_xg / away_xg — used when xg_weight > 0; a match without
+          xG is fitted on its goals alone.
 
         teams: extra teams to rate even if they have no matches yet. With a ridge
         penalty a zero-match team settles at the prior (league average) — which
@@ -169,6 +178,13 @@ class DixonColes:
         a = df.away_team.map(idx).values
         hs = df.home_score.values.astype(int)
         as_ = df.away_score.values.astype(int)
+        wx = self.xg_weight if {"home_xg", "away_xg"} <= set(df.columns) else 0.0
+        if wx:
+            xh = pd.to_numeric(df["home_xg"], errors="coerce").values
+            xa = pd.to_numeric(df["away_xg"], errors="coerce").values
+            has_xg = np.isfinite(xh) & np.isfinite(xa)
+            xh, xa = np.where(has_xg, xh, 0.0), np.where(has_xg, xa, 0.0)
+            mix = np.where(has_xg, wx, 0.0)    # per-match weight on xG
 
         def nll(params):
             att = np.concatenate([params[: n - 1], [-params[: n - 1].sum()]])  # sum-to-zero
@@ -183,6 +199,10 @@ class DixonColes:
                 + poisson.logpmf(as_, la)
                 + np.log(self._tau(hs, as_, lh, la, rho))
             )
+            if wx:
+                # Quasi-Poisson on xG: y log(lambda) - lambda, constants dropped.
+                ll_xg = xh * np.log(lh) - lh + xa * np.log(la) - la
+                ll = (1.0 - mix) * ll + mix * ll_xg
             penalty = self.ridge * (np.sum(att ** 2) + np.sum(dfn ** 2)) if self.ridge else 0.0
             return -np.sum(w * ll) + penalty
 
@@ -240,19 +260,29 @@ class DixonColes:
         return np.array([poisson.pmf(k, conceded) for k in range(kmax + 1)])
 
 
+# Finished matches with each side's xG summed from its players. One definition,
+# shared by fit_goal_model and backtest._goal_model_as_of. Params: (season, season).
+MATCHES_WITH_XG_SQL = """
+    SELECT f.kickoff_time, f.home_score, f.away_score,
+           th.short_name AS home_team, ta.short_name AS away_team,
+           x.home_xg, x.away_xg
+    FROM fixtures f
+    JOIN teams th ON th.season=f.season AND th.team_id=f.home_team
+    JOIN teams ta ON ta.season=f.season AND ta.team_id=f.away_team
+    LEFT JOIN (SELECT fixture_id,
+                      SUM(CASE WHEN was_home=1 THEN expected_goals END) AS home_xg,
+                      SUM(CASE WHEN was_home=0 THEN expected_goals END) AS away_xg
+               FROM player_gw WHERE season=? GROUP BY fixture_id) x
+           ON x.fixture_id=f.fixture_id
+    WHERE f.season = ? AND f.finished = 1
+"""
+
+
 def fit_goal_model(conn: sqlite3.Connection, seasons: list[str], xi: float = 0.0018) -> DixonColes:
     """Fit on finished fixtures across seasons, joining team short_names."""
     frames = []
     for s in seasons:
-        q = """
-            SELECT f.kickoff_time, f.home_score, f.away_score,
-                   th.short_name AS home_team, ta.short_name AS away_team
-            FROM fixtures f
-            JOIN teams th ON th.season=f.season AND th.team_id=f.home_team
-            JOIN teams ta ON ta.season=f.season AND ta.team_id=f.away_team
-            WHERE f.season = ? AND f.finished = 1
-        """
-        frames.append(pd.read_sql(q, conn, params=(s,)))
+        frames.append(pd.read_sql(MATCHES_WITH_XG_SQL, conn, params=(s, s)))
     df = pd.concat(frames, ignore_index=True)
     df["kickoff"] = pd.to_datetime(df["kickoff_time"], errors="coerce", utc=True)
     df = df.dropna(subset=["kickoff"])
