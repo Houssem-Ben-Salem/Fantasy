@@ -18,6 +18,15 @@ on:
   schedule:
     - cron: "23 */2 * * *"       # off the hour: top-of-hour schedules queue longest
   workflow_dispatch:
+    inputs:
+      mode:
+        description: >-
+          auto: post only inside the deadline windows. preview: build this week's
+          brief now, show it on this run's summary page, and send it once as a test
+          issue that closes itself (checks the squad variable and email delivery).
+        type: choice
+        options: [auto, preview]
+        default: auto
 
 permissions:
   contents: read
@@ -41,7 +50,9 @@ jobs:
 
       - name: Decide
         id: decide
-        run: python3 scripts/deadline_window.py --github-output "$GITHUB_OUTPUT"
+        env:
+          MODE: ${{ inputs.mode }}           # empty on scheduled runs = auto
+        run: python3 scripts/deadline_window.py --mode "$MODE" --github-output "$GITHUB_OUTPUT"
 
       - uses: actions/setup-python@v5
         if: steps.decide.outputs.work == 'true'

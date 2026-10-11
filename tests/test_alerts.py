@@ -93,3 +93,20 @@ def test_flag_changes_since_the_brief_are_reported():
                                         deadline_brief.flags_snapshot(rows1),
                                         {"229": "Tarkowski", "480": "Gibbs-White"})
     assert len(changes) == 1 and "Tarkowski" in changes[0] and "Hamstring" in changes[0]
+
+
+# ------------------------------------------------------------ preview (manual delivery test)
+
+def test_preview_builds_the_coming_gameweek_whatever_the_window():
+    acts = dw.preview(7, DL)
+    assert acts == [{"do": "preview", "gw": 7, "deadline": DL.isoformat()}]
+
+
+def test_a_preview_issue_is_never_mistaken_for_the_real_brief():
+    """The window logic finds the real brief by exact title and closes stale
+    briefs by prefix; a delivery test must match neither, or it would suppress
+    Thursday's brief or be closed as stale."""
+    test_issue = _issue(3, dw.preview_title(7), state="CLOSED")
+    assert dw.preview_title(7) != dw.title(7)
+    assert _do(dw.decide(NOW, 7, DL, [test_issue])) == ["brief"]
+    assert "close" not in _do(dw.decide(NOW, 7, DL, [{**test_issue, "state": "OPEN"}]))

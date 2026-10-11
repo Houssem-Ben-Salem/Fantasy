@@ -223,6 +223,20 @@ def main() -> int:
         if act["do"] == "brief":
             body = build(act["gw"], dl, act["final"])
             print(gh_issues.create(deadline_window.title(act["gw"]), body))
+        elif act["do"] == "preview":
+            # Manual delivery test: the full brief, built on the runner, shown on
+            # the run's summary page and sent once as an issue that closes itself.
+            body = build(act["gw"], dl, False)
+            summary = os.environ.get("GITHUB_STEP_SUMMARY")
+            if summary:
+                with open(summary, "a") as fh:
+                    fh.write(body + "\n")
+            url = gh_issues.create(deadline_window.preview_title(act["gw"]),
+                                   "Delivery test, closed automatically. If this reached your "
+                                   "inbox, briefs will too.\n\n" + body)
+            number = int(url.rstrip("/").rsplit("/", 1)[-1])
+            gh_issues.close(number, "Delivery test complete — closing.")
+            print(f"preview sent and closed: {url}")
         elif act["do"] == "final":
             issue = next(i for i in gh_issues.list_alerts() if i["number"] == act["number"])
             gh_issues.comment(act["number"], build(act["gw"], dl, True, issue.get("body") or ""))

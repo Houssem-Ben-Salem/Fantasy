@@ -43,6 +43,17 @@ def title(gw: int) -> str:
     return f"{gh_issues.PREFIX} GW{gw} deadline brief"
 
 
+def preview_title(gw: int) -> str:
+    """A manual delivery test. Must never equal title(gw) (that would suppress the
+    real brief) nor look like a stale brief to close."""
+    return f"{gh_issues.PREFIX} delivery test: GW{gw} brief preview"
+
+
+def preview(gw: int, deadline: datetime) -> list[dict]:
+    """Build the coming gameweek's brief now, whatever the window says."""
+    return [{"do": "preview", "gw": gw, "deadline": deadline.isoformat()}]
+
+
 def next_deadline(events: list[dict], now: datetime) -> tuple[int, datetime] | None:
     for e in sorted(events, key=lambda e: e["id"]):
         dl = datetime.fromisoformat(e["deadline_time"].replace("Z", "+00:00"))
@@ -71,6 +82,8 @@ def decide(now: datetime, gw: int, deadline: datetime, issues: list[dict]) -> li
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--github-output")
+    ap.add_argument("--mode", default="auto", choices=["auto", "preview", ""],
+                    help="preview: build and send the brief now as a closed test issue")
     a = ap.parse_args()
     now = datetime.now(timezone.utc)
     req = urllib.request.Request("https://fantasy.premierleague.com/api/bootstrap-static/",
@@ -78,11 +91,14 @@ def main() -> int:
     with urllib.request.urlopen(req, timeout=60) as r:
         events = json.load(r)["events"]
     nd = next_deadline(events, now)
-    actions = decide(now, nd[0], nd[1], gh_issues.list_alerts()) if nd else []
+    if a.mode == "preview":
+        actions = preview(*nd) if nd else []
+    else:
+        actions = decide(now, nd[0], nd[1], gh_issues.list_alerts()) if nd else []
     for act in [x for x in actions if x["do"] == "close"]:
         gh_issues.close(act["number"], "Deadline passed — closing this brief.")
         print(f"closed #{act['number']} {act['title']}")
-    work = [x for x in actions if x["do"] in ("brief", "final")]
+    work = [x for x in actions if x["do"] in ("brief", "final", "preview")]
     print(f"next deadline: GW{nd[0]} {nd[1]:%a %d %b %H:%M} UTC" if nd else "no upcoming deadline",
           "| work:", json.dumps(work) or "none")
     if a.github_output:
