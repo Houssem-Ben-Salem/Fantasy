@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 An autonomous Fantasy Premier League analyst: data pipeline → SQLite → expected-points
-model → MILP squad optimiser → MCP server exposing 11 tools to Claude. Python 3.10+
+model → MILP squad optimiser → MCP server exposing 12 tools to Claude. Python 3.10+
 (CI pins 3.12). No packaging config — run everything as `python -m fplbrain.<module>`
 from the repo root.
 
@@ -29,20 +29,24 @@ and refits the full model in a module-scoped fixture, so run `make ingest` first
 every test in it errors. `tests/test_sources_season_gating.py` is self-contained
 (monkeypatched HTTP, temp dirs) and runs anywhere, as do the other newer test files
 (`test_minutes_model.py`, `test_goal_ridge.py`, `test_chip_xi.py`, `test_player_lookup.py`,
-`test_projection_freshness.py`, `test_validation_reporting.py`, `test_solver.py`, `test_attack_fixture.py`, `test_transfer_pairs.py`). 75 tests total.
+`test_projection_freshness.py`, `test_validation_reporting.py`, `test_solver.py`, `test_attack_fixture.py`, `test_transfer_pairs.py`, `test_entry.py`,
+`test_mcp_state.py`). 95 tests total.
 
 Underlying CLIs take more flags than the Makefile uses:
 
 ```bash
 python -m fplbrain.ingest   --db data/fpl.db --current 2026-27 --history 2024-25 2025-26 [--no-strict]
-python scripts/refresh.py   --db data/fpl.db --season 2026-27 --horizon 6 --start-gw 0   # 0 = next unfinished GW
+python scripts/refresh.py   --db data/fpl.db --season 2026-27 --horizon 6 --start-gw 0   # 0 = next GW whose deadline has not passed
 python -m fplbrain.backtest --db data/fpl.db --season 2025-26 --history 2024-25 --start-gw 8 --end-gw 38 --out report.json
 python -m fplbrain.sources  # connectivity probe — run this first in any new environment
+python -m fplbrain.entry --id <FPL team id> [--save]   # real squad -> squad_state
 ```
 
 Environment variables: `FPLBRAIN_DB` (default `data/fpl.db`), `FPLBRAIN_SEASON`
 (`2026-27`), `FPLBRAIN_CACHE` (`./data/cache`), `FPLBRAIN_ALLOW_LIVE` (`1`; set to `0`
-to skip live-API attempts entirely — faster in a sandbox where they will 403).
+to skip live-API attempts entirely — faster in a sandbox where they will 403),
+`FPLBRAIN_ENTRY_ID` (the manager's FPL team id, used by `sync_squad` and `fplbrain.entry`;
+set it in the MCP server's env, never in the repo — the repo is public).
 `FPLBRAIN_SEASON` also drives `sources.CURRENT_SEASON`, which decides which season is
 allowed to use the live API; if it disagrees with `ingest --current`, the live path is
 skipped and everything falls back to the mirror, which is safe but staler.
@@ -55,7 +59,8 @@ ingest.py      ETL + validation + cross-season crosswalk -> SQLite (schema.sql)
 models.py      Dixon-Coles goals | minutes | DefCon | attacking rates -> xP
 optimize.py    PuLP/CBC MILP: initial squad, transfer plan, chip valuation
 backtest.py    walk-forward eval with automatic leakage detection
-mcp_server.py  11 tools; imports models + optimize, never sources directly
+entry.py       a manager's real squad, bank, chips from the public FPL API
+mcp_server.py  12 tools; imports entry + models + optimize, never sources directly
 ```
 
 `scripts/refresh.py` is the orchestrator (ingest → project → persist → exit code).
@@ -274,6 +279,22 @@ Rules any new tool must follow:
    rather than a count, reports *all* bad names in a list instead of the first, rejects
    duplicates, and takes `expect=15` so a dropped name can't hand the solver a short
    squad. Guarded by `tests/test_player_lookup.py`.
+
+**The squad comes from the API, not from typed names.** `sync_squad()` (via
+`fplbrain/entry.py`) reads picks, bank, transfers and chips from public endpoints
+and saves `squad_state` for the next gameweek; with no names, `plan_transfers` and
+`chip_advice` use that row, selling prices included. Two numbers are DERIVED and
+labelled so: selling price (half of a rise kept, rounded down) and free transfers
+(replayed from history; Wildcard/Free Hit weeks keep saved ones). Hand-typed squads
+carried the wrong backup keeper for five weeks and a bank £0.6m too high. A sync
+keeps notes already saved for that gameweek — they are what decisions get scored by.
+
+**Planning starts at `models.next_gameweek()`**: the first gameweek whose deadline
+(first kickoff − 90 min) has not passed. "Lowest gameweek with an unfinished
+fixture" returned a locked week every weekend. `plan_transfers`' headline is the
+solver's gain over rolling — the number the −4 policy in `prompts/AGENT.md` is
+judged by — not the sum of raw per-player xP, which counted benched players'
+replacements in full (+16.80 printed for a plan worth +7.0).
 
 Projections are cached in-process in `_PROJ`, keyed on `(start_gw, n_gw)`;
 `refresh_data()` invalidates it. **`refresh_data()` must ingest *and* project *and*

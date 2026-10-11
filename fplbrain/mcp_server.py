@@ -40,7 +40,7 @@ except ImportError:  # pragma: no cover
             'MCP SDK not found. Install with: pip install "mcp[cli]"'
         ) from exc
 
-from . import models, optimize
+from . import entry, models, optimize
 
 DB = os.environ.get("FPLBRAIN_DB", "data/fpl.db")
 SEASON = os.environ.get("FPLBRAIN_SEASON", "2026-27")
@@ -80,11 +80,25 @@ def _projections(start_gw: int, n_gw: int = 6, rebuild: bool = False) -> pd.Data
 
 
 def _next_gw() -> int:
+    """The next gameweek whose deadline has not passed (see models.next_gameweek)."""
     with _conn() as c:
-        row = pd.read_sql(
-            "SELECT MIN(gw) g FROM fixtures WHERE season=? AND finished=0 AND gw IS NOT NULL",
-            c, params=(SEASON,)).iloc[0]
-    return int(row["g"]) if pd.notna(row["g"]) else 1
+        return models.next_gameweek(c, SEASON)
+
+
+def _saved_squad() -> dict | None:
+    """The most recent squad_state row, parsed: elements, selling prices, bank,
+    free transfers. None when nothing has been saved."""
+    with _conn() as c:
+        df = pd.read_sql("SELECT * FROM squad_state ORDER BY gw DESC, recorded_at DESC "
+                         "LIMIT 1", c)
+    if df.empty:
+        return None
+    r = df.iloc[0]
+    squad = json.loads(r["squad"])
+    return {"gw": int(r["gw"]), "elements": [int(p["element"]) for p in squad],
+            "selling_prices": {int(p["element"]): float(p["selling_price"])
+                               for p in squad if p.get("selling_price") is not None},
+            "bank": float(r["bank"]), "free_transfers": int(r["free_transfers"])}
 
 
 # ------------------------------------------------------------------ name lookup
@@ -415,54 +429,92 @@ def build_squad(budget: float = 100.0, gw_start: int = 0, n_gw: int = 6,
 
 
 @mcp.tool()
-def plan_transfers(squad_names: str, bank: float = 0.0, free_transfers: int = 1,
+def plan_transfers(squad_names: str = "", bank: float | None = None,
+                   free_transfers: int | None = None,
                    n_gw: int = 5, max_transfers: int = 3) -> str:
     """
     Given your current 15, decide transfers over the coming gameweeks.
 
     Explicitly prices each extra transfer at -4 and only recommends a hit when the
-    horizon gain beats it. squad_names: comma-separated list of 15 player names.
+    horizon gain beats it.
+
+    squad_names: leave EMPTY to use the squad saved by sync_squad() — real squad,
+      real bank, derived selling prices and free transfers. Typing 15 names is the
+      fallback, and hand-entered squads have been wrong before (a wrong backup
+      keeper for five weeks). bank / free_transfers override the saved values.
     """
     gw = _next_gw()
     proj = _projections(gw, n_gw)
-    # expect=15: a squad short by one silently changes the problem the solver
-    # is given, and it will happily return an answer for the wrong squad.
-    try:
-        ids = _resolve_players(proj, squad_names, expect=15)
-    except PlayerLookupError as e:
-        return f"**Could not resolve your squad.**\n{e}"
+    selling, note = None, ""
+    if not squad_names.strip():
+        st = _saved_squad()
+        if st is None:
+            return "No saved squad. Call sync_squad() first, or pass squad_names."
+        ids, selling = st["elements"], st["selling_prices"] or None
+        bank = st["bank"] if bank is None else bank
+        free_transfers = st["free_transfers"] if free_transfers is None else free_transfers
+        note = (f"Squad: saved state for GW{st['gw']}"
+                + ("" if st["gw"] == gw else f" — **planning GW{gw}; re-run sync_squad()**")
+                + ".\n\n")
+    else:
+        # expect=15: a squad short by one silently changes the problem the solver
+        # is given, and it will happily return an answer for the wrong squad.
+        try:
+            ids = _resolve_players(proj, squad_names, expect=15)
+        except PlayerLookupError as e:
+            return f"**Could not resolve your squad.**\n{e}"
+    bank = 0.0 if bank is None else bank
+    free_transfers = 1 if free_transfers is None else free_transfers
 
     res = optimize.transfer_plan(
         proj, ids, horizon=list(range(gw, gw + n_gw)), bank=bank,
-        free_transfers=free_transfers, max_transfers=max_transfers)
+        free_transfers=free_transfers, max_transfers=max_transfers,
+        selling_prices=selling)
 
     if not res.transfers:
-        return (f"**No transfer beats rolling.** Objective {res.objective:.2f} xP.\n"
+        return note + (f"**No transfer beats rolling.** Objective {res.objective:.2f} xP.\n"
                 f"Keep the squad and bank the free transfer.\n\n"
                 f"Captain: {res.captain.get('web_name')}")
 
-    lines = [f"**{len(res.transfers)} transfer(s), {res.hits_taken} hit(s)**", ""]
+    # The decision number is the solver's gain over rolling: decayed, bench at
+    # bench_weight, hits priced. Summing per-pair raw xP instead counted a
+    # benched player's replacement in full — GW7 2026-27 printed +16.80 for a
+    # plan worth +7.0 — and the hit policy in prompts/AGENT.md is judged on it.
+    roll = optimize.transfer_plan(
+        proj, ids, horizon=list(range(gw, gw + n_gw)), bank=bank,
+        free_transfers=free_transfers, max_transfers=0, selling_prices=selling)
+    gain = res.objective - roll.objective
+
+    lines = [note + f"**{len(res.transfers)} transfer(s), {res.hits_taken} hit(s)** — "
+             f"gain over rolling **{gain:+.2f} xP** (GW{gw}-{gw + n_gw - 1}, after hits)", ""]
     for t in res.transfers:
-        lines.append(f"- OUT {t['out']} ({t['out_xp']} xP) → IN {t['in']} ({t['in_xp']} xP) "
-                     f"| net **{t['xp_gain']:+.2f}** over GW{gw}-{gw + n_gw - 1}")
-    net = sum(t["xp_gain"] for t in res.transfers) - res.hits_taken * 4
-    lines += ["", f"Net after hits: **{net:+.2f} xP**", f"Bank after: £{res.bank:.1f}m",
-              f"Captain: {res.captain.get('web_name')}"]
+        lines.append(f"- OUT {t['out']} → IN {t['in']}  "
+                     f"(raw GW{gw}-{gw + n_gw - 1} xP {t['out_xp']} → {t['in_xp']})")
+    lines += ["", "Gain over rolling is the number to judge a hit by; the raw per-player "
+              "xP ignores bench weighting and the horizon decay.",
+              f"Bank after: £{res.bank:.1f}m", f"Captain: {res.captain.get('web_name')}"]
     return "\n".join(lines)
 
 
 @mcp.tool()
-def chip_advice(squad_names: str, gw: int = 0) -> str:
-    """Quantify Bench Boost / Triple Captain / Free Hit value for a gameweek."""
+def chip_advice(squad_names: str = "", gw: int = 0) -> str:
+    """Quantify Bench Boost / Triple Captain / Free Hit value for a gameweek.
+    squad_names: leave EMPTY to use the squad saved by sync_squad()."""
     gw = gw or _next_gw()
     proj = _projections(gw, 6)
-    # Bench Boost value is a sum over the squad, so a dropped name understates
-    # the chip rather than failing — silently, and in the direction of not
-    # playing it. expect=15 makes that impossible.
-    try:
-        ids = _resolve_players(proj, squad_names, expect=15)
-    except PlayerLookupError as e:
-        return f"**Could not resolve your squad.**\n{e}"
+    if not squad_names.strip():
+        st = _saved_squad()
+        if st is None:
+            return "No saved squad. Call sync_squad() first, or pass squad_names."
+        ids = st["elements"]
+    else:
+        # Bench Boost value is a sum over the squad, so a dropped name understates
+        # the chip rather than failing — silently, and in the direction of not
+        # playing it. expect=15 makes that impossible.
+        try:
+            ids = _resolve_players(proj, squad_names, expect=15)
+        except PlayerLookupError as e:
+            return f"**Could not resolve your squad.**\n{e}"
     ev = optimize.evaluate_chips(proj, ids, gw)
     return json.dumps(ev, indent=2, default=str)
 
@@ -555,6 +607,38 @@ def load_state(gw: int = 0) -> str:
         else:
             df = pd.read_sql("SELECT * FROM squad_state ORDER BY gw DESC LIMIT 1", c)
     return _md(df) if not df.empty else "No saved state."
+
+
+@mcp.tool()
+def sync_squad(entry_id: int = 0, save: bool = True) -> str:
+    """
+    Read the manager's real squad, bank, free transfers and chips from the public
+    FPL API (no login) and save it as squad_state for the gameweek being planned.
+    Call this at the start of every session instead of trusting a pasted squad.
+
+    entry_id: the FPL team id; 0 uses the FPLBRAIN_ENTRY_ID environment variable.
+    Selling prices and free transfers are DERIVED from the transfer history
+    (fplbrain/entry.py) and labelled so. Transfers already made for the next
+    deadline are invisible until it passes.
+    """
+    eid = entry_id or int(os.environ.get("FPLBRAIN_ENTRY_ID", "0") or 0)
+    if not eid:
+        return "No entry id: pass entry_id, or set FPLBRAIN_ENTRY_ID in the MCP server env."
+    try:
+        s = entry.entry_state(eid)
+    except Exception as exc:  # network, 404, API shape change
+        return f"FPL API unavailable for entry {eid}: {exc}. Fall back to load_state()."
+    if save:
+        with _conn() as c:
+            entry.save(c, s)
+    df = pd.DataFrame(s["squad"])[["name", "pos", "team", "now_cost", "purchase_price",
+                                   "selling_price", "acquired", "captain", "vice"]]
+    head = (f"**{s['entry_name']}** (entry {eid}), planning GW{s['gw_next']} — "
+            f"bank £{s['bank']:.1f}m · free transfers {s['free_transfers']} (derived) · "
+            f"selling value £{s['selling_value']:.1f}m (derived) · chips: "
+            f"{', '.join(s['chips_remaining']) or 'none'}"
+            + (f" · saved as squad_state GW{s['gw_next']}" if save else ""))
+    return head + "\n\n" + _md(df, max_rows=15)
 
 
 if __name__ == "__main__":

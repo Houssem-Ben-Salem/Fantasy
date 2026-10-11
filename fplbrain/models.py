@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
@@ -657,6 +657,35 @@ def project_gameweek(conn: sqlite3.Connection, cur_season: str, gw: int,
         + 6.0 * np.clip(out["exp_goals"].fillna(0), 0, None)
     )
     return out
+
+
+# FPL deadlines sit 90 minutes before a gameweek's first kickoff (checked on
+# 2026-27 GW5, GW6 and GW7 against the API's deadline_time).
+DEADLINE_LEAD = timedelta(minutes=90)
+
+
+def next_gameweek(conn: sqlite3.Connection, season: str,
+                  now: datetime | None = None) -> int:
+    """
+    The first gameweek whose deadline has not passed — the one a manager can
+    still change.
+
+    NOT "the lowest gameweek with an unfinished fixture": between a deadline and
+    that gameweek's last match, every weekend, that is a locked week. On Sunday
+    11 Oct 2026 it returned GW6 mid-gameweek, so the planning tools optimised a
+    week nobody could change and refresh.py projected from it.
+    """
+    now = now or datetime.now(timezone.utc)
+    firsts = pd.read_sql(
+        """SELECT gw, MIN(kickoff_time) k FROM fixtures
+           WHERE season=? AND gw IS NOT NULL AND kickoff_time IS NOT NULL
+           GROUP BY gw ORDER BY gw""", conn, params=(season,))
+    for gw, k in zip(firsts["gw"], firsts["k"]):
+        if pd.Timestamp(k).to_pydatetime() - DEADLINE_LEAD > now:
+            return int(gw)
+    row = conn.execute("SELECT MIN(gw) FROM fixtures WHERE season=? AND finished=0 "
+                       "AND gw IS NOT NULL", (season,)).fetchone()
+    return int(row[0]) if row and row[0] is not None else 1
 
 
 def project_horizon(conn: sqlite3.Connection, cur_season: str, start_gw: int, n_gw: int,
