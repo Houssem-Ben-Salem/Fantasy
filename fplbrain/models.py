@@ -723,6 +723,30 @@ def project_horizon(conn: sqlite3.Connection, cur_season: str, start_gw: int, n_
     return out, diagnostics
 
 
+def _run_identity() -> dict:
+    """Which code and which constants produced a run, so a run scored months later
+    can be attributed to a model rather than guessed from its timestamp. CI sets
+    GITHUB_SHA; locally it is read from git, with "-dirty" for uncommitted edits."""
+    import os
+    import subprocess
+    version = os.environ.get("GITHUB_SHA", "")[:12]
+    if not version:
+        try:
+            here = os.path.dirname(os.path.abspath(__file__))
+            version = subprocess.run(["git", "-C", here, "rev-parse", "--short=12", "HEAD"],
+                                     capture_output=True, text=True, timeout=5).stdout.strip()
+            dirty = subprocess.run(["git", "-C", here, "status", "--porcelain", "--", "."],
+                                   capture_output=True, text=True, timeout=5).stdout.strip()
+            version = (version + "-dirty") if version and dirty else version
+        except (OSError, subprocess.SubprocessError):
+            version = ""
+    return {"code_version": version or "unknown",
+            "constants": {"ATTACK_FIXTURE_ALPHA": ATTACK_FIXTURE_ALPHA,
+                          "MINUTES_PRIOR_K": MINUTES_PRIOR_K,
+                          "GOAL_RIDGE_LAMBDA": GOAL_RIDGE_LAMBDA,
+                          "PRIOR_STRENGTH": PRIOR_STRENGTH}}
+
+
 def persist_projections(conn: sqlite3.Connection, proj: pd.DataFrame, season: str,
                         diagnostics: dict | None = None) -> str:
     run_id = "proj-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
@@ -741,7 +765,7 @@ def persist_projections(conn: sqlite3.Connection, proj: pd.DataFrame, season: st
         " VALUES (?,?,?,?,?,?,?)",
         (run_id, datetime.now(timezone.utc).isoformat(), season,
          int(proj.gw.min()), int(proj.gw.max()), "projection",
-         __import__("json").dumps(diagnostics or {}, default=str)),
+         __import__("json").dumps({**(diagnostics or {}), **_run_identity()}, default=str)),
     )
     conn.commit()
     return run_id
