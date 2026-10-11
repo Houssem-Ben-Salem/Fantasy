@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""
+fplbrain pre-commit: the repository's commit rules, for everyone.
+
+Claude Code's own hooks only see Claude's tool calls; git hooks see every
+commit, a person's or an agent's. Enable once per clone:
+
+    git config core.hooksPath .githooks
+
+1. Nothing under data/ is ever committed — the database, the cache, the
+   newsletters, the xMins log. It happened once (Sept 2026) and had to be
+   stripped from history before a push.
+2. When Python, tests or requirements are staged, the suite must pass.
+   (It runs against the working tree, so unstaged edits are tested too.)
+"""
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+
+
+def forbidden(paths: list[str]) -> list[str]:
+    return [p for p in paths if p == "data" or p.startswith("data/")]
+
+
+def needs_tests(paths: list[str]) -> bool:
+    return any(p.endswith(".py") or p.startswith("tests/") or p.startswith(".githooks/")
+               or p == "requirements.txt" for p in paths)
+
+
+def _git(*args: str) -> str:
+    return subprocess.run(["git", *args], capture_output=True, text=True).stdout
+
+
+def main() -> int:
+    paths = [p for p in _git("diff", "--cached", "--name-only", "--diff-filter=ACMR").splitlines() if p]
+    bad = forbidden(paths)
+    if bad:
+        print("pre-commit: refusing to commit paths under data/ — nothing there is versioned:",
+              *bad, sep="\n  ", file=sys.stderr)
+        print(f"unstage with: git restore --staged {' '.join(bad)}", file=sys.stderr)
+        return 1
+    if needs_tests(paths):
+        root = Path(_git("rev-parse", "--show-toplevel").strip())
+        venv = root / ".venv" / "bin" / "python"
+        cmd = [str(venv) if venv.exists() else sys.executable,
+               "-m", "pytest", "tests/", "-q", "-x", "-p", "no:cacheprovider"]
+        if not (root / "data" / "fpl.db").exists():   # fresh clone: skip the DB-backed file
+            cmd.append("--ignore=tests/test_constraints.py")
+        r = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
+        if r.returncode != 0:
+            print(r.stdout[-3000:], r.stderr[-1500:], sep="\n", file=sys.stderr)
+            print("pre-commit: tests failed — commit refused.", file=sys.stderr)
+            return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

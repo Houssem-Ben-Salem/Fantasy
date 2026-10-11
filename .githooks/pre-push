@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""
+fplbrain pre-push: refuse any push that would rewrite or delete remote history.
+
+git passes one line per ref on stdin: "<local ref> <local sha> <remote ref>
+<remote sha>". A push rewrites history when the remote commit exists and is
+not an ancestor of what is being pushed — exactly what --force or a +refspec
+does — so this catches a force push however it is spelled. The CI bot's
+fast-forward commits and normal pushes pass untouched.
+"""
+from __future__ import annotations
+
+import subprocess
+import sys
+
+ZERO = "0" * 40
+
+
+def rewrites(lines: list[str], is_ancestor) -> list[str]:
+    bad = []
+    for line in lines:
+        parts = line.split()
+        if len(parts) != 4:
+            continue
+        _lref, lsha, rref, rsha = parts
+        if lsha == ZERO:
+            bad.append(f"{rref}: would delete the remote branch")
+        elif rsha != ZERO and not is_ancestor(rsha, lsha):
+            bad.append(f"{rref}: would overwrite {rsha[:8]}, which is not in what you are pushing "
+                       f"— fetch and rebase instead of forcing")
+    return bad
+
+
+def _is_ancestor(a: str, b: str) -> bool:
+    # 0 = ancestor; 1 = not; 128 = remote commit not even fetched (also refuse)
+    return subprocess.run(["git", "merge-base", "--is-ancestor", a, b],
+                          capture_output=True).returncode == 0
+
+
+def main() -> int:
+    bad = rewrites(sys.stdin.read().splitlines(), _is_ancestor)
+    if bad:
+        print("pre-push: refusing to rewrite remote history:", *bad, sep="\n  ", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
