@@ -15,6 +15,7 @@ on:
 
 permissions:
   contents: write            # required for the commit step below
+  issues: write              # failure alerts: a red scheduled run notifies no one
 
 concurrency:
   group: refresh-fpl-data
@@ -245,3 +246,20 @@ jobs:
             git commit -m "refresh projections: $(date -u +%F)"
             git push
           fi
+
+      # This workflow failed every day for 17 days (25 Sep - 11 Oct 2026) and
+      # nobody knew: a red scheduled run notifies no one. The first failure
+      # opens "[fplbrain] CI failing: refresh-fpl-data" (GitHub emails the
+      # owner), later ones comment, the first green run closes it. Stdlib + gh
+      # only, so it still works when pip install is what broke.
+      - name: Alert on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci_alert.py fail --workflow refresh-fpl-data --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Clear failure alert
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci_alert.py ok --workflow refresh-fpl-data --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

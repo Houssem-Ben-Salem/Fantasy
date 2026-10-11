@@ -1,0 +1,74 @@
+name: deadline-brief
+
+# Makes sure a deadline is never missed again (GW6 2026-27 was, with two free
+# transfers in hand). Every two hours it checks the next FPL deadline; inside
+# 48h it opens a "[fplbrain] GWn deadline brief" issue — GitHub emails the
+# repository owner — and inside 12h it comments a final call with refreshed
+# injury flags and plan. Briefs close themselves once their deadline passes.
+#
+# The common case is "nothing to do", decided by a stdlib-only script before
+# any dependency is installed, so idle runs take seconds. GitHub's scheduler
+# can start runs hours late; the windows are wide for that reason.
+#
+# Squad-specific sections need the repository variable FPL_ENTRY_ID (Settings
+# -> Secrets and variables -> Actions -> Variables). Without it the brief is a
+# reminder plus model picks.
+
+on:
+  schedule:
+    - cron: "23 */2 * * *"       # off the hour: top-of-hour schedules queue longest
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: deadline-brief
+  cancel-in-progress: false
+
+jobs:
+  brief:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      FPLBRAIN_SEASON: "2026-27"
+      FPLBRAIN_ENTRY_ID: ${{ vars.FPL_ENTRY_ID }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Decide
+        id: decide
+        run: python3 scripts/deadline_window.py --github-output "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v5
+        if: steps.decide.outputs.work == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - if: steps.decide.outputs.work == 'true'
+        run: pip install -r requirements.txt
+
+      # A failed refresh must not cost the reminder: the brief notes stale or
+      # missing projections inline and still posts.
+      - name: Refresh database and projections
+        if: steps.decide.outputs.work == 'true'
+        continue-on-error: true
+        run: python scripts/refresh.py --db data/fpl.db --horizon 6
+
+      - name: Post brief / final call
+        if: steps.decide.outputs.work == 'true'
+        env:
+          ACTIONS_JSON: ${{ steps.decide.outputs.actions }}
+        run: python scripts/deadline_brief.py --actions "$ACTIONS_JSON"
+
+      - name: Alert on failure
+        if: failure()
+        run: python3 scripts/ci_alert.py fail --workflow deadline-brief --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Clear failure alert
+        if: success()
+        run: python3 scripts/ci_alert.py ok --workflow deadline-brief --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
