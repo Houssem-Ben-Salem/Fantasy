@@ -46,7 +46,12 @@ jobs:
       GH_TOKEN: ${{ github.token }}
 
     steps:
+      # Full history: the brief's model-health line scores CI's own Friday
+      # exports from git history, because the runner's database is fresh and
+      # holds no earlier projection runs. The repository is small.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Decide
         id: decide

@@ -141,7 +141,9 @@ def chips_section(gw: int) -> str:
 def health_section() -> str:
     from fplbrain import scorecard
     with _conn() as c:
-        _, pooled = scorecard.score(c, os.environ.get("FPLBRAIN_SEASON", "2026-27"), include_ci=False)
+        # include_ci: on a runner the database is fresh, so the only prospective
+        # history is CI's own Friday exports in git (checkout fetch-depth 0).
+        _, pooled = scorecard.score(c, os.environ.get("FPLBRAIN_SEASON", "2026-27"), include_ci=True)
         run = c.execute("SELECT run_id, provenance FROM runs WHERE run_id LIKE 'proj-%' "
                         "ORDER BY created_at DESC LIMIT 1").fetchone()
     prov = json.loads(run[1]) if run and run[1] else {}
@@ -151,8 +153,9 @@ def health_section() -> str:
         st["last"] = st.gws.map(lambda g: max(int(x) for x in str(g).split(",")))
         # the model that scored the most recent gameweek, preferring local runs
         r = st.sort_values(["last", "source"], ascending=[False, False]).iloc[0]
-        lines.append(f"Prospective record, points among starters vs a naive baseline: "
-                     f"{r.model_minus_naive:+.3f} [{r.lo:+.3f}, {r.hi:+.3f}] over GW{r.gws} — "
+        lines.append(f"Prospective record ({r.model} model, {r.source} runs), points among "
+                     f"starters vs a naive baseline: {r.model_minus_naive:+.3f} "
+                     f"[{r.lo:+.3f}, {r.hi:+.3f}] over GW{r.gws} — "
                      + ("still undecided." if r.lo <= 0 <= r.hi else "decided."))
     return " ".join(lines)
 
