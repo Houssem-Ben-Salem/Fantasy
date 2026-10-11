@@ -22,7 +22,10 @@ concurrency:
 
 jobs:
   refresh:
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: that label moves to Ubuntu 26 from 19 Oct 2026,
+    # mid-season. A runner-image change is a migration to make on a quiet week
+    # and verify, not one to discover on a deadline Friday.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     # Single source of truth for both the refresh and the export assertion that
