@@ -32,6 +32,8 @@ NOW = datetime.now(timezone.utc)
 
 def _ago(t: datetime) -> str:
     s = (NOW - t).total_seconds()
+    if s < 3600:
+        return f"{s / 60:.0f}m ago"
     return f"{s / 3600:.0f}h ago" if s < 172800 else f"{s / 86400:.0f}d ago"
 
 
@@ -85,13 +87,17 @@ def _get(url: str):
 
 def github_lines(slug: str) -> list[str]:
     out = []
-    runs = _get(f"https://api.github.com/repos/{slug}/actions/workflows/"
-                f"refresh-fpl-data.yml/runs?per_page=1").get("workflow_runs", [])
-    if runs:
-        r = runs[0]
-        state = r["conclusion"] or r["status"]
-        mark = "green" if state == "success" else f"{state.upper()} — {r['html_url']}"
-        out.append(f"CI refresh-fpl-data: {mark} ({_ago(datetime.fromisoformat(r['created_at'].replace('Z', '+00:00')))})")
+    # Both workflows: if the brief workflow itself breaks, its failure alert may
+    # break with it (same gh call), so a red run must be visible from here too.
+    for wf in ("refresh-fpl-data", "deadline-brief"):
+        runs = _get(f"https://api.github.com/repos/{slug}/actions/workflows/"
+                    f"{wf}.yml/runs?per_page=1").get("workflow_runs", [])
+        if runs:
+            r = runs[0]
+            state = r["conclusion"] or r["status"]
+            mark = "green" if state == "success" else f"{state.upper()} — {r['html_url']}"
+            when = _ago(datetime.fromisoformat(r["created_at"].replace("Z", "+00:00")))
+            out.append(f"CI {wf}: {mark} ({when})")
     issues = [i for i in _get(f"https://api.github.com/repos/{slug}/issues?state=open&per_page=20")
               if i["title"].startswith("[fplbrain]") and "pull_request" not in i]
     for i in issues[:3]:
@@ -124,7 +130,7 @@ def main() -> int:
         pass
     text = "fplbrain status\n" + "\n".join(f"- {l}" for l in lines)
     short = [l.split(",")[0] if l.startswith(("GW", "squad")) else l for l in lines]
-    short = [re.sub(r" — https://\S+", "", l).replace("CI refresh-fpl-data: ", "CI ") for l in short]
+    short = [re.sub(r" — https://\S+", "", l) for l in short]
     print(json.dumps({"systemMessage": "fplbrain · " + " · ".join(short[:3]),
                       "hookSpecificOutput": {"hookEventName": "SessionStart",
                                              "additionalContext": text}}))
