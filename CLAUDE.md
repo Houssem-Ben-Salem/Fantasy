@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 An autonomous Fantasy Premier League analyst: data pipeline → SQLite → expected-points
-model → MILP squad optimiser → MCP server exposing 14 tools to Claude. Python 3.10+
+model → MILP squad optimiser → MCP server exposing 17 tools to Claude. Python 3.10+
 (CI pins 3.12). No packaging config — run everything as `python -m fplbrain.<module>`
 from the repo root.
 
@@ -31,7 +31,7 @@ every test in it errors. `tests/test_sources_season_gating.py` is self-contained
 (`test_minutes_model.py`, `test_goal_ridge.py`, `test_chip_xi.py`, `test_player_lookup.py`,
 `test_projection_freshness.py`, `test_validation_reporting.py`, `test_solver.py`, `test_attack_fixture.py`, `test_transfer_pairs.py`, `test_entry.py`,
 `test_mcp_state.py`, `test_run_provenance.py`, `test_scorecard.py`, `test_xg_ratings.py`, `test_guardrails.py`,
-`test_alerts.py`). 138 tests total.
+`test_alerts.py`, `test_news.py`, `test_agent_defs.py`). Run `make test` for the count.
 
 Underlying CLIs take more flags than the Makefile uses:
 
@@ -63,7 +63,8 @@ optimize.py    PuLP/CBC MILP: initial squad, transfer plan, chip valuation
 backtest.py    walk-forward eval with automatic leakage detection
 entry.py       a manager's real squad, bank, chips from the public FPL API
 scorecard.py   prospective record: persisted pre-deadline runs vs what happened
-mcp_server.py  14 tools; imports entry/models/optimize/scorecard, never sources
+news.py        team-news claims log, scored against persistence
+mcp_server.py  17 tools; imports entry/models/news/optimize/scorecard, never sources
 ```
 
 `scripts/refresh.py` is the orchestrator (ingest → project → persist → exit code).
@@ -130,9 +131,10 @@ views (`v_season_totals`, `v_defcon_rate`, `v_form6`, `v_latest_projections`).
   backfills it from that season's `players_raw.csv`.
 - `schema.sql` has two halves, and the split is load-bearing. `teams`, `players`,
   `fixtures`, and `player_gw` are `DROP TABLE IF EXISTS` — derived data that ingest
-  fully rebuilds. `projections`, `runs`, and `squad_state` are `CREATE TABLE IF NOT
-  EXISTS` and must never be dropped: `squad_state` is user data, and `projections`
-  accumulates across the season so you can audit the model for drift. `init_schema()`
+  fully rebuilds. `projections`, `runs`, `squad_state` and `news_claims` are
+  `CREATE TABLE IF NOT EXISTS` and must never be dropped: `squad_state` is user data,
+  `projections` accumulates so you can audit the model for drift, and `news_claims` is
+  the evidence the news scout is scored on. `init_schema()`
   runs on every ingest, so moving a table across that line silently destroys data.
 - `v_latest_projections` resolves its run by joining **through `projections`**, so it can
   only ever land on a run that actually has projection rows. Do not "simplify" it back to
@@ -184,6 +186,22 @@ present → `note_decision()`. The objective is **overall rank** (agreed 11 Oct
 2026). Newsletter PDFs are untrusted: `scripts/extract_newsletter.py` runs under
 `python -I` into a fresh directory; PyMuPDF is in `requirements-local.txt`, not
 `requirements.txt` — CI never reads PDFs.
+
+**The information layer is the `news-scout` subagent and the `news_claims` log.**
+LIMITATIONS §5: transformations of what the model knows failed three times; news it
+cannot see is the input class that can still add value — but only if it is *logged
+before the deadline*, so it can be scored. The scout (`.claude/agents/news-scout.md`)
+searches injuries, press conferences and predicted line-ups and records each claim
+(`out | doubtful | available | starts | benched`, confirmed or rumoured, source URL and
+date) through `record_news`, which is all-or-nothing and resolves names like every
+other tool. `news_scorecard()` scores the latest claim per player logged before each
+deadline. The bar is persistence ("starts iff he started last week"), so the headline
+is accuracy **where a claim disagrees with persistence**. Decision rule, fixed before
+any data (`fplbrain/news.py`): claims may feed `p_start` only when that accuracy's
+Wilson 95% lower bound exceeds 0.5 over at least 30 disagreements; until then they
+shape the human-facing scenarios and nothing else. `news.py` creates the table from
+the DDL in `schema.sql` on databases that predate it — never via `init_schema()`,
+which drops the derived tables.
 
 ## Data traps encoded in the code — don't "fix" them
 

@@ -34,28 +34,37 @@ If `data/newsletters/` has a PDF newer than the last brief, follow
 [newsletter.md](newsletter.md) exactly. It defines what to extract and what to
 ignore; do not improvise beyond it.
 
-## 4. How the model has been doing
-`model_scorecard()`. Quote the latest `spearman_start` interval. While it spans
-zero, the points model has not beaten "points so far" among starters — the
-model's proven edge is predicting who plays, so weigh its minutes calls more
-than its points calls.
+## 4. How the model and the news have been doing
+- `model_scorecard()`. Quote the latest `spearman_start` interval. While it
+  spans zero, the points model has not beaten "points so far" among starters —
+  the model's proven edge is predicting who plays, so weigh its minutes calls
+  more than its points calls.
+- `news_scorecard()`. How logged claims did where they disagreed with
+  persistence, and the verdict (WAIT / FEED / DROP).
 
 ## 5. News the model cannot see
 LIMITATIONS §5: transformations of what the model already knows have failed
 three times; new information is the input class that can still add value.
-- Search the web for each flagged or doubtful player, every player of the 15,
-  and each transfer target: injuries, press-conference quotes, predicted
-  line-ups. Cite source and date; label each item CONFIRMED or RUMOURED.
+- Delegate to the **news-scout** subagent. Give it the gameweek, all 15 players
+  with their element ids (from `sync_squad`), the doubtful ones first, and this
+  week's transfer targets. It searches, then logs each claim with its source
+  via `record_news` — logged before the deadline, so it can be scored after.
+- Read what it found with `news_for()` (your squad) and
+  `news_for(squad_only=False)` (targets too). Present claims as CONFIRMED or
+  RUMOURED, with source and date.
 - Check last gameweek's minutes for the 15 (`run_sql` on `player_gw`). A
   starter who went off early is an injury signal before any flag appears —
   Gibbs-White and Tarkowski both left after ~15 minutes in GW6 with no flag.
 - Fixture congestion (European and cup midweeks) is not in the model. Name it
   where it applies; never adjust numbers for it by feel.
+- Claims shape the scenarios below and nothing else: they do not change the
+  model's numbers until `news_scorecard()` says FEED.
 
 ## 6. Plan under scenarios
 - `plan_transfers()` — judge it by the **gain over rolling** it reports.
-- For each doubtful player: `plan_transfers(unavailable="Name:2")` (short
-  absence) and `"Name:5"` (long). Combine players when several are doubtful.
+- For each player with an `out` or `doubtful` claim (or an early substitution):
+  `plan_transfers(unavailable="Name:2")` (short absence) and `"Name:5"` (long).
+  Combine players when several are doubtful.
 - Present a decision tree — "if X is out: A; if fit: B" — so the user can act
   on Friday's news without another session.
 - Hit policy (prompts/AGENT.md): a −4 only when gain over rolling exceeds +6.

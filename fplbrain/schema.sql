@@ -184,6 +184,30 @@ CREATE TABLE IF NOT EXISTS squad_state (
     notes           TEXT
 );
 
+-- Team news recorded by the news scout or the user: who will play, with the
+-- source and the moment it was logged. DURABLE for the same reason as
+-- squad_state: it is the evidence the scout is scored on, and a claim only
+-- counts for a gameweek if it was recorded BEFORE that deadline (fplbrain/news.py,
+-- which also creates this table on databases that predate it).
+CREATE TABLE IF NOT EXISTS news_claims (
+    claim_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    season        TEXT NOT NULL,
+    gw            INTEGER NOT NULL,          -- the gameweek the claim is about
+    element       INTEGER NOT NULL,          -- season-scoped, resolved by mcp_server
+    player        TEXT,                      -- web_name when recorded
+    claim         TEXT NOT NULL,             -- out | doubtful | available | starts | benched
+    chance        REAL,                      -- stated chance of playing, 0-100, when given
+    confidence    TEXT NOT NULL,             -- confirmed | rumoured
+    source_type   TEXT NOT NULL,             -- presser | club | journalist | predicted_lineup | fpl_flag | newsletter | other
+    source_name   TEXT,
+    source_url    TEXT,
+    published_at  TEXT,                      -- when the source said it
+    quote         TEXT,
+    recorded_at   TEXT NOT NULL,             -- when it was logged, UTC: the scoring cut-off
+    recorded_by   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_news_claims_gw ON news_claims(season, gw);
+
 -- ---------------------------------------------------------------- views
 
 DROP VIEW IF EXISTS v_season_totals;

@@ -61,6 +61,9 @@ I'm an ML engineer. Talk to me at that level. No preamble, no restating my quest
 | `chip_advice(gw)` | Bench Boost / Triple Captain / Free Hit valuation for the synced squad |
 | `fixture_outlook(n_gw)` | modelled fixture difficulty, better than official FDR |
 | `model_scorecard()` | how pre-deadline projections did vs a naive baseline, pooled over the season |
+| `record_news(claims_json)` | log team-news claims with sources (all or nothing), so they can be scored |
+| `news_for(gw)` | latest logged claim per player for a gameweek |
+| `news_scorecard()` | how logged claims did where they disagreed with persistence; WAIT / FEED / DROP |
 | `run_sql(query)` | anything else — read-only, the schema is in the tool docstring |
 | `note_decision(note)` | record a judgement call and its reason on the saved state |
 | `save_state` / `load_state` | write or read whole saved state; `sync_squad` writes the squad itself |
@@ -96,7 +99,9 @@ the full version of these steps.
    not luck.
 3. **Search for news** from the last 7 days affecting my squad or watchlist.
    Injuries, line-ups, set-piece changes, managerial changes. Cite with dates.
-   Distinguish confirmed from rumoured.
+   Distinguish confirmed from rumoured. **Log every claim with `record_news`**
+   before the deadline — news that isn't logged can never be tested. Claims shape
+   scenarios, not the model's numbers, until `news_scorecard()` says FEED.
 4. `fixture_outlook()` → which clubs are turning green and red.
 5. `plan_transfers()` with no arguments — it uses the synced squad, bank, free
    transfers and selling prices. Planning starts at the next gameweek whose

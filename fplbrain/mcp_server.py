@@ -40,7 +40,7 @@ except ImportError:  # pragma: no cover
             'MCP SDK not found. Install with: pip install "mcp[cli]"'
         ) from exc
 
-from . import entry, models, optimize, scorecard
+from . import entry, models, news, optimize, scorecard
 
 DB = os.environ.get("FPLBRAIN_DB", "data/fpl.db")
 SEASON = os.environ.get("FPLBRAIN_SEASON", "2026-27")
@@ -672,6 +672,98 @@ def model_scorecard(last_n: int = 8, include_ci: bool = True) -> str:
             + _md(pooled.round(3), max_rows=20)
             + "\n\nUntil spearman_start's interval excludes zero, the points model has not "
               "been shown to beat 'points so far'; minutes carries spearman_all.")
+
+
+def _players_frame() -> pd.DataFrame:
+    """Current players in the shape _resolve_player and _describe expect."""
+    with _conn() as c:
+        return pd.read_sql(
+            """SELECT p.element, p.web_name, t.short_name AS team, p.position, p.now_cost
+               FROM players p JOIN teams t ON t.season=p.season AND t.team_id=p.team_id
+               WHERE p.season=?""", c, params=(SEASON,))
+
+
+@mcp.tool()
+def record_news(claims_json: str, recorded_by: str = "news-scout") -> str:
+    """
+    Log team-news claims so they can be scored later. All or nothing: if any
+    claim is invalid, none is recorded and every problem is listed.
+
+    claims_json: a JSON list of objects —
+      player        name or element id (resolved like every other tool)
+      claim         out | doubtful | available | starts | benched
+      confidence    confirmed (club/manager/FPL flag) | rumoured (journalist, predicted line-up)
+      source_type   presser | club | journalist | predicted_lineup | fpl_flag | newsletter | other
+      source_url    required unless source_type is fpl_flag
+      source_name, published_at (ISO date), quote, chance (0-100), gw (default: next open)
+
+    Claims inform the human-facing plan only, until news_scorecard() shows they
+    beat persistence where they disagree with it (fplbrain/news.py).
+    """
+    try:
+        raw = json.loads(claims_json)
+    except json.JSONDecodeError as e:
+        return f"**Nothing recorded.** Not valid JSON: {e}"
+    raw = [raw] if isinstance(raw, dict) else raw
+    pool, gw0, errors, claims = _players_frame(), _next_gw(), [], []
+    for i, c in enumerate(raw):
+        try:
+            el = _resolve_player(pool, str(c.get("player", "")))
+        except PlayerLookupError as e:
+            errors.append(f"claim {i + 1}: {e}")
+            continue
+        try:
+            gw = int(c.get("gw") or gw0)
+        except (TypeError, ValueError):
+            gw = c.get("gw")
+        claims.append({**c, "element": el, "gw": gw,
+                       "player": pool.loc[pool.element == el, "web_name"].iloc[0]})
+    if not errors:
+        try:
+            with _conn() as conn:
+                news.record(conn, SEASON, claims, recorded_by)
+        except news.ClaimError as e:
+            errors = list(e.args[0])
+    if errors:
+        return ("**Nothing recorded.** Fix these and resend the whole batch:\n"
+                + "\n".join(f"- {x}" for x in errors))
+    df = pd.DataFrame(claims)[["player", "gw", "claim", "confidence", "source_type"]]
+    return f"Recorded {len(claims)} claim(s).\n\n" + _md(df)
+
+
+@mcp.tool()
+def news_for(gw: int = 0, squad_only: bool = True) -> str:
+    """The latest recorded claim per player for a gameweek (default: the next
+    open one), for the synced squad unless squad_only is False."""
+    gw = gw or _next_gw()
+    with _conn() as c:
+        d = news.latest(c, SEASON, gw)
+    st = _saved_squad() if squad_only else None
+    if st:
+        d = d[d.element.isin(st["elements"])]
+    if d.empty:
+        return f"No news recorded for GW{gw}{' for your squad' if st else ''}."
+    cols = ["player", "claim", "chance", "confidence", "source_type", "source_name",
+            "published_at", "recorded_at", "source_url"]
+    return f"Latest claim per player for GW{gw}:\n\n" + _md(d[cols], max_rows=40)
+
+
+@mcp.tool()
+def news_scorecard() -> str:
+    """How recorded claims did against what happened — the latest claim per player
+    logged before each deadline — and the verdict against persistence."""
+    with _conn() as c:
+        res = news.score(c, SEASON, scorecard.deadlines(c, SEASON))
+    if res["rows"].empty:
+        return ("No claim was recorded before a finished gameweek's deadline yet, so there is "
+                f"nothing to score. {res['verdict']}")
+    dis = res["disagree"]
+    db = res["doubtful"]
+    return ("**Claims scored on what happened**\n\n" + _md(res["by_claim"].round(3))
+            + f"\n\n**Where claims disagreed with persistence:** {dis['correct']}/{dis['n']} right, "
+              f"95% [{dis['lo']:.2f}, {dis['hi']:.2f}]."
+            + (f" Doubtful-with-chance Brier {db['brier']:.3f} over {db['n']}." if db["n"] else "")
+            + f"\n\n{res['verdict']}")
 
 
 def _last_synced_entry() -> int:
