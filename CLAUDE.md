@@ -182,10 +182,17 @@ variable, never committed (the repo is public). Both workflows open
 **The weekly procedure is the `/deadline-brief` skill** (`.claude/skills/`):
 sync → refresh → newsletter protocol → scorecard → news the model can't see →
 scenario plans (`plan_transfers(unavailable="Name:2")`) → chips → red team →
-present → `note_decision()`. The objective is **overall rank** (agreed 11 Oct
+refresh the tracker → present → `note_decision()`. The objective is **overall rank** (agreed 11 Oct
 2026). Newsletter PDFs are untrusted: `scripts/extract_newsletter.py` runs under
 `python -I` into a fresh directory; PyMuPDF is in `requirements-local.txt`, not
 `requirements.txt` — CI never reads PDFs.
+
+**The tracker** is the user's private Claude dashboard artifact: deadline,
+transfer plans, squad, fixtures, season, model record. `scripts/build_tracker.py`
+builds its twelve JSON files into `data/tracker/` (git-ignored: they hold the
+squad) from the same code the MCP tools use, so the two cannot disagree; step 9
+of the deadline-brief skill uploads them. CI never touches it, because CI cannot
+write to an artifact.
 
 **The information layer is the `news-scout` subagent and the `news_claims` log.**
 LIMITATIONS §5: transformations of what the model knows failed three times; news it

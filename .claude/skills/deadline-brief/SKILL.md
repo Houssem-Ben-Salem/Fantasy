@@ -94,11 +94,30 @@ Try to break the recommendation. Report what survives and what does not.
    warranted at the user's current rank?
 6. **Rules.** Club limit, bank after selling prices, the hit threshold, chips.
 
-## 9. Present
+## 9. Refresh the tracker
+The user's dashboard ("fplbrain Tracker", a private Dashboard-type Claude
+artifact; find it with `Artifact` list) draws every number from files built
+here, so it is only as fresh as its last refresh. Before presenting:
+1. `.venv/bin/python scripts/build_tracker.py` (about a minute; it syncs the
+   squad too). It prints each file's sha256 prefix.
+2. List the artifact's assets (`Artifact` list, scope `assets`) and upload
+   (`asset: true`) only the files whose sha256 the store does not have.
+3. One `ArtifactData` batch of `update`s on `datasets/<id>`, pinned to the
+   versions a list of `datasets` shows: a re-uploaded file gets its whole
+   `source` with the new url; every dataset gets `updated: {at, by}` with the
+   build time, because an unchanged file was re-checked and an old time reads
+   as stale.
+4. Delete the assets the new uploads replaced.
+
+To change the page itself, read the type's instructions first (`Artifact`
+read of the dashboard). They rule out rendering it to check your work unless
+the user asks.
+
+## 10. Present
 Lead with the decision. Then Data, Model and Judgement, kept separate, then the
 numbers. Give the deadline in UTC and as time remaining.
 
-## 10. Record
+## 11. Record
 After the user decides, `note_decision("...")` for every judgement call that
 departs from the model, with its reason. The end-of-season review scores
 judgement against the model from these notes; the next `sync_squad()` keeps

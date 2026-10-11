@@ -19,3 +19,6 @@ analysis/squad_watch.log
 # Newsletters are third-party content, and the xMins log is a local research
 # record. Nothing under data/ is versioned (the DB, the cache, these).
 data/newsletters/
+
+# The tracker's files hold the manager's squad and season (scripts/build_tracker.py).
+data/tracker/
