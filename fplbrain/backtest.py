@@ -54,20 +54,14 @@ DEFCON_THRESHOLD = models.DEFCON_THRESHOLD
 
 def _goal_model_as_of(conn, season: str, hist_seasons: list[str], cutoff: str,
                       xi: float = 0.0018) -> models.DixonColes:
-    """Fit on every finished match that kicked off strictly before `cutoff`."""
-    frames = []
-    for s in hist_seasons + [season]:
-        q = """
-            SELECT f.kickoff_time, f.home_score, f.away_score,
-                   th.short_name AS home_team, ta.short_name AS away_team
-            FROM fixtures f
-            JOIN teams th ON th.season=f.season AND th.team_id=f.home_team
-            JOIN teams ta ON ta.season=f.season AND ta.team_id=f.away_team
-            WHERE f.season = ? AND f.finished = 1 AND f.kickoff_time < ?
-        """
-        frames.append(pd.read_sql(q, conn, params=(s, cutoff)))
+    """Fit on every finished match that kicked off strictly before `cutoff` —
+    with each side's xG, exactly as fit_goal_model reads it (models.XG_WEIGHT)."""
+    frames = [pd.read_sql(models.MATCHES_WITH_XG_SQL, conn, params=(s, s))
+              for s in hist_seasons + [season]]
     df = pd.concat(frames, ignore_index=True)
     df["kickoff"] = pd.to_datetime(df["kickoff_time"], errors="coerce", utc=True)
+    df = df[df["kickoff"] < pd.Timestamp(cutoff, tz="UTC") if pd.Timestamp(cutoff).tzinfo is None
+            else df["kickoff"] < pd.Timestamp(cutoff)]
     return models.DixonColes(xi=xi).fit(df.dropna(subset=["kickoff"]))
 
 

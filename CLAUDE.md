@@ -30,7 +30,7 @@ every test in it errors. `tests/test_sources_season_gating.py` is self-contained
 (monkeypatched HTTP, temp dirs) and runs anywhere, as do the other newer test files
 (`test_minutes_model.py`, `test_goal_ridge.py`, `test_chip_xi.py`, `test_player_lookup.py`,
 `test_projection_freshness.py`, `test_validation_reporting.py`, `test_solver.py`, `test_attack_fixture.py`, `test_transfer_pairs.py`, `test_entry.py`,
-`test_mcp_state.py`, `test_run_provenance.py`, `test_scorecard.py`). 100 tests total.
+`test_mcp_state.py`, `test_run_provenance.py`, `test_scorecard.py`, `test_xg_ratings.py`). 103 tests total.
 
 Underlying CLIs take more flags than the Makefile uses:
 
@@ -217,6 +217,19 @@ rather than preventing it. Known cost, recorded in the constant's comment: this 
 lowers league-wide predicted goals as λ grows, so re-check level bias before raising it.
 Validated in `analysis/validate_goal_ridge.py`; guarded by
 `analysis/check_team_rating_bounds.py`.
+
+**Team ratings learn from xG as well as goals.** `DixonColes.fit` maximises
+`(1 − XG_WEIGHT) × goals log-likelihood + XG_WEIGHT × quasi-Poisson log-likelihood of team xG`
+(0.75; team xG summed from `player_gw.expected_goals` by `MATCHES_WITH_XG_SQL`, which
+`fit_goal_model` and `backtest._goal_model_as_of` share — keep them on one definition).
+Goals alone rated 2026-27 Hull the second-best defence on 4 conceded from 7.40 xG
+against. Validated on held-out *goals*, not xG; the per-match gain replicated
+(+0.018, +0.020) without either stage clearing 95% alone, and agreement with
+Pinnacle's lines rose in both weeks tested (GW5 xG corr 0.780 → 0.894, GW6
+0.782 → 0.833). `XG_WEIGHT = 0` reproduces the goals-only fit exactly
+(`tests/test_xg_ratings.py`). A match without xG is fitted on its goals. Note for
+tests: dataclass defaults are bound when the class is created, so changing
+`models.XG_WEIGHT` at runtime does not change `DixonColes()`; pass `xg_weight=`.
 
 **Attacking returns are scaled by the fixture.** `exp_goals` and `exp_assists` are
 `xg90 * mins_frac * attack_multiplier(...) ** ATTACK_FIXTURE_ALPHA` (0.75), where the

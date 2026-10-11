@@ -46,6 +46,16 @@ fixtures. Backtest 0.3263 -> 0.3295 (22/31 weeks), concentrated in forwards. Ear
 market corrections (GW3 Guéhi, GW5 Wissa) scaled attack against a baseline that never
 contained the fixture, so they over-boosted; the GW5 call survives a correct one.
 
+*Team ratings now use xG (`XG_WEIGHT = 0.75`)*, which closes most of the promoted-club
+problem recorded on 17 Sep. Hull's defence goes from -0.305 (second-best) to +0.015
+(league average) as of GW5, and agreement with Pinnacle rose in both weeks tested
+(GW5 xG corr 0.780 -> 0.894, CS 0.817 -> 0.913; GW6 0.782 -> 0.833, 0.737 -> 0.816).
+Held-out goals: +0.018/match on 2025-26 (P=0.973, w chosen there), +0.020/match on
+2026-27 (P=0.77). Backtest Spearman 0.3295 -> 0.3315 (20/31 weeks), clean-sheet
+Brier 0.1968 -> 0.1949. `check_promoted_prior.py` still measures the goals-only
+direction it was written for; the shrinkage-target question it raised is now
+largely moot, because the evidence fixed it before the prior had to.
+
 *Versus the market, on outcomes:* GW5 log-lik -33.75 ours vs -33.81 Pinnacle; GW6
 (8 of 10 played) -21.81 vs -21.91. Two dead heats over 18 matches — parity at most,
 not an edge. The standing disagreements are the promoted clubs (GW6: EVE at HUL,

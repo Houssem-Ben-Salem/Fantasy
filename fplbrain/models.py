@@ -115,8 +115,23 @@ ATTACK_FIXTURE_ALPHA = 0.75
 # Weight on chance quality when fitting team ratings: the fit maximises
 # (1 - w) * goals log-likelihood + w * quasi-Poisson log-likelihood of team xG
 # (summed from player_gw.expected_goals). 0 reproduces the goals-only model
-# exactly. Chosen out-of-sample in analysis/validate_xg_ratings.py.
-XG_WEIGHT = 0.0
+# exactly. Validated in analysis/validate_xg_ratings.py.
+#
+# Goals alone are mostly luck over a few matches: 2026-27 Hull conceded 4 from
+# 7.40 xG against and were rated the second-best defence (-0.305), putting
+# Newcastle at home to them on 1.07 expected goals against Pinnacle's 2.02 —
+# the largest market disagreement in two consecutive gameweeks.
+#
+# Scored on held-out ACTUAL GOALS (xG may help only by predicting goals better).
+# CHOSEN ON 2025-26 GW8-38 by max held-out LL: 0.75, +5.58 over 310 matches
+# (+0.018/match), 21/31 weeks, plateau from 0.5 to 1.0; match bootstrap
+# [-0.10, +11.36] P=0.973 (optimistic, w chosen there). CONFIRMED on 2026-27
+# GW1-5 frozen: +1.02 over 50 matches (+0.020/match), [-1.60, +3.60] P=0.77.
+# DECISION LAYER, against Pinnacle lines the model never saw: GW5 xG corr
+# 0.780 -> 0.894, CS corr 0.817 -> 0.913; GW6 0.782 -> 0.833 and 0.737 -> 0.816.
+# Hull's defence -0.305 -> +0.015, i.e. league average, and the goal level
+# moved toward the market (2.68 -> 2.74 a match).
+XG_WEIGHT = 0.75
 
 
 @dataclass
