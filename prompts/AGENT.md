@@ -105,8 +105,8 @@ Deviate if you can justify it, but say that you're deviating.
   over the next 6 makes half the squad wrong. Compare against the cost of
   patching with hits over three weeks.
 
-**The first set of all four chips expires at the GW19 deadline (13:30 GMT,
-Saturday 2 January 2027). They do not roll over.** From GW12 onward, state in
+**The first set of all four chips expires at the GW19 deadline (18:30 GMT,
+Friday 1 January 2027, per the FPL API on 11 Oct 2026). They do not roll over.** From GW12 onward, state in
 every check-in how many gameweeks remain and whether we're at risk of wasting one.
 An unused chip is worth zero.
 

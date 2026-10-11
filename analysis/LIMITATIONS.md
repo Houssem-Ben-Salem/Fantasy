@@ -18,6 +18,52 @@ produces its numbers; run it from the repo root against a built `data/fpl.db`.
 
 ## 0. Changes since this document was written — read first
 
+**2026-10-11: the first prospective test, one model gap closed, two infrastructure breaks.**
+
+*The fixes held up on data nobody had seen — but only on minutes.* GW5 2026-27 is
+the first gameweek where both the old model (CI's export, 18 Sep 14:19 UTC) and the
+fixed one (17 Sep) committed to projections before kickoff. Over 659 players,
+team-cluster bootstrap:
+
+| GW5 | Spearman | RMSE | top-50 avg | p_start Brier |
+|---|---|---|---|---|
+| old model (CI) | 0.620 | 2.41 | 4.00 | 0.195 |
+| fixed model | **0.738** | **2.19** | **4.92** | **0.086** |
+| naive GW1-4 points/week | 0.689 | 2.35 | 3.68 | 0.115 |
+
+Every gap excludes zero. Two things temper it. The old model was **worse than the
+naive baseline** — what CI published every Friday since the mirror stalled was worse
+than doing nothing clever. And **among the 220 who actually started, no model ranks
+points**: Spearman 0.08-0.14, fixed minus naive +0.009 [-0.088, +0.097]. The whole
+edge is predicting who plays. One gameweek of starters' points is mostly noise;
+whether the points model is any good needs many weeks of prospective scoring.
+
+*Attacking returns were fixture-blind.* The module docstring said "scaled by opponent
+strength"; the code was `xg90 * mins_frac`. Fixed with `ATTACK_FIXTURE_ALPHA = 0.75`,
+evidence and caveats in that constant's comment: per fixture the gain replicated
+out-of-sample (+0.044, +0.053) but neither stage excludes zero once bootstrapped over
+fixtures. Backtest 0.3263 -> 0.3295 (22/31 weeks), concentrated in forwards. Earlier
+market corrections (GW3 Guéhi, GW5 Wissa) scaled attack against a baseline that never
+contained the fixture, so they over-boosted; the GW5 call survives a correct one.
+
+*Versus the market, on outcomes:* GW5 log-lik -33.75 ours vs -33.81 Pinnacle; GW6
+(8 of 10 played) -21.81 vs -21.91. Two dead heats over 18 matches — parity at most,
+not an edge. The standing disagreements are the promoted clubs (GW6: EVE at HUL,
+Pinnacle 1.52 vs ours 0.76). HUL's defence rating moved -0.305 -> -0.201 after one
+more match, the direction `check_promoted_prior.py` predicted. Hull have conceded 4
+against 7.40 xGA: the rating is fitted on goals, and goals flatter them.
+
+*Mover minutes* (`check_mover_minutes.py`, movers -0.119 vs stayers, CI excludes 0)
+pools four runs of which three are the collapsed pre-fix model. Re-measure on post-fix
+runs only before acting on it.
+
+*Infrastructure.* CI failed every daily run for 17 days: `pulp>=2.7` was unbounded and
+PuLP 4.0 (25 Sep) stopped bundling CBC. Locally, macOS 27 left PuLP's x86_64-only CBC
+unable to execute. Both fixed (`optimize._solve`, capped `requirements.txt`), and the
+fallback exposed `int(var.value())` truncating 0.9999999 to 0 — a 14-man "Optimal"
+squad. `transfer_plan` also paired its report in element-id order, printing a
+midfielder as swapped for a defender. See CLAUDE.md, Optimiser conventions.
+
 **2026-09-15: three defects fixed, each validated out-of-sample before shipping.**
 Numbers below §0 were produced before these fixes unless marked. Where a fix
 moved a headline figure, it is recorded here rather than silently overwritten.
