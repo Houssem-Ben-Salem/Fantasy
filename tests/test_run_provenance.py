@@ -29,3 +29,4 @@ def test_a_run_records_its_code_version_and_constants():
     assert prov["constants"]["ATTACK_FIXTURE_ALPHA"] == models.ATTACK_FIXTURE_ALPHA
     assert prov["constants"]["MINUTES_PRIOR_K"] == models.MINUTES_PRIOR_K
     assert prov["constants"]["GOAL_RIDGE_LAMBDA"] == models.GOAL_RIDGE_LAMBDA
+    assert prov["constants"]["XG_WEIGHT"] == models.XG_WEIGHT

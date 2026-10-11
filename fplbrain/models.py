@@ -789,6 +789,7 @@ def _run_identity() -> dict:
             "constants": {"ATTACK_FIXTURE_ALPHA": ATTACK_FIXTURE_ALPHA,
                           "MINUTES_PRIOR_K": MINUTES_PRIOR_K,
                           "GOAL_RIDGE_LAMBDA": GOAL_RIDGE_LAMBDA,
+                          "XG_WEIGHT": XG_WEIGHT,
                           "PRIOR_STRENGTH": PRIOR_STRENGTH}}
 
 
