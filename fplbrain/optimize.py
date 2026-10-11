@@ -60,6 +60,39 @@ class OptimResult:
         return "\n".join(lines)
 
 
+def _solve(prob: pulp.LpProblem) -> None:
+    """
+    Solve with CBC, falling back to HiGHS where CBC cannot execute.
+
+    PuLP 3.x bundles CBC for macOS only as an x86_64 binary, so on Apple Silicon
+    without Rosetta the exec itself fails (OSError, errno 86) — and
+    `listSolvers(onlyAvailable=True)` still reports CBC, because it only checks
+    that the file exists. PuLP 4.0 stopped bundling CBC altogether
+    (PulpSolverError). CBC stays first so CI's numbers do not move; HiGHS runs
+    with gapRel=0 so the fallback proves optimality as CBC does, rather than
+    stopping at its default 0.01% gap.
+    """
+    try:
+        prob.solve(pulp.PULP_CBC_CMD(msg=0))
+        return
+    except (OSError, pulp.PulpSolverError) as e:
+        cbc_error = e
+    try:
+        prob.solve(pulp.HiGHS(msg=0, gapRel=0))
+    except Exception as e:  # highspy missing, or HiGHS itself failed
+        raise RuntimeError(
+            f"no working MILP solver: CBC failed ({cbc_error}) and HiGHS failed "
+            f"({e}). `pip install -r requirements.txt` installs highspy.") from e
+    log.info("CBC unavailable here (%s); solved with HiGHS", cbc_error)
+
+
+def _val(var: pulp.LpVariable) -> int:
+    """Read an integer variable. Rounds, never truncates: a solver may return a
+    binary anywhere inside its integrality tolerance, and int(0.9999999) is 0 —
+    which dropped selected players while the status still said 'Optimal'."""
+    return int(round(var.value() or 0))
+
+
 def _prep(proj: pd.DataFrame, horizon: list[int], decay: float = 0.86) -> pd.DataFrame:
     """
     Pivot long projections to one row per player, with a time-decayed
@@ -148,12 +181,12 @@ def initial_squad(proj: pd.DataFrame, horizon: list[int], budget: float = 100.0,
         if match:
             prob += sq[match[0]] == 1
 
-    prob.solve(pulp.PULP_CBC_CMD(msg=0))
+    _solve(prob)
     status = pulp.LpStatus[prob.status]
 
-    df["in_squad"] = [int(sq[i].value() or 0) for i in idx]
-    df["in_xi"] = [int(xi[i].value() or 0) for i in idx]
-    df["is_captain"] = [int(cap[i].value() or 0) for i in idx]
+    df["in_squad"] = [_val(sq[i]) for i in idx]
+    df["in_xi"] = [_val(xi[i]) for i in idx]
+    df["is_captain"] = [_val(cap[i]) for i in idx]
 
     squad = df[df.in_squad == 1].sort_values(
         ["position", "horizon_xp"], key=lambda s: s.map(
@@ -254,13 +287,13 @@ def transfer_plan(proj: pd.DataFrame, current_squad: list[int], horizon: list[in
         sel = [i for i in idx if df.loc[i, "team"] == team]
         prob += pulp.lpSum(sq[i] for i in sel) <= MAX_PER_CLUB
 
-    prob.solve(pulp.PULP_CBC_CMD(msg=0))
+    _solve(prob)
 
-    df["in_squad"] = [int(sq[i].value() or 0) for i in idx]
-    df["in_xi"] = [int(xi[i].value() or 0) for i in idx]
-    df["is_captain"] = [int(cap[i].value() or 0) for i in idx]
-    df["bought"] = [int(buy[i].value() or 0) for i in idx]
-    df["sold"] = [int(sell[i].value() or 0) for i in idx]
+    df["in_squad"] = [_val(sq[i]) for i in idx]
+    df["in_xi"] = [_val(xi[i]) for i in idx]
+    df["is_captain"] = [_val(cap[i]) for i in idx]
+    df["bought"] = [_val(buy[i]) for i in idx]
+    df["sold"] = [_val(sell[i]) for i in idx]
 
     outs = df[df.sold == 1]
     ins = df[df.bought == 1]
@@ -283,7 +316,7 @@ def transfer_plan(proj: pd.DataFrame, current_squad: list[int], horizon: list[in
     if vice_d:
         vice_d["exp_points"] = vice_d.get("first_gw_xp", 0)
 
-    hits = int(n_hits.value() or 0)
+    hits = _val(n_hits)
     spent = float(ins["now_cost"].sum())
     raised = float(outs["sell_value"].sum())
 

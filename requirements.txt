@@ -1,11 +1,18 @@
-pandas>=2.0
-numpy>=1.24
-scipy>=1.10
-requests>=2.31
-pulp>=2.7
-tabulate>=0.9
-mcp[cli]>=1.0
-pytest>=7.0   # for `make test`
+# Major versions are capped deliberately. CI installs fresh on every run, so an
+# unbounded `pulp>=2.7` picked up PuLP 4.0 three hours after its release on
+# 25 Sep 2026 — 4.0 stopped bundling CBC — and every daily run failed from then
+# on. A new major is a migration to do on purpose, not something to discover
+# from a red deadline-day run. Raise a cap only after `make test` passes on it.
+pandas>=2.0,<4
+numpy>=1.24,<3
+scipy>=1.10,<2
+requests>=2.31,<3
+pulp>=2.7,<4       # 4.x: CBC moved to the `pulp[cbc]` extra and Python >=3.12
+highspy>=1.15,<2   # MILP fallback where PuLP's bundled CBC cannot execute
+                   # (macOS ships it as x86_64 only; Apple Silicon without Rosetta)
+tabulate>=0.9,<1
+mcp[cli]>=1.0,<3
+pytest>=7.0,<10    # for `make test`
 # optional, only if the domains are reachable from your machine:
 # soccerdata>=1.9    # Understat / FBref / Club Elo scrapers
 # penaltyblog>=1.0   # alternative goal models

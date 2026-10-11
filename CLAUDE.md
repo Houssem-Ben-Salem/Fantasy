@@ -29,7 +29,7 @@ and refits the full model in a module-scoped fixture, so run `make ingest` first
 every test in it errors. `tests/test_sources_season_gating.py` is self-contained
 (monkeypatched HTTP, temp dirs) and runs anywhere, as do the other newer test files
 (`test_minutes_model.py`, `test_goal_ridge.py`, `test_chip_xi.py`, `test_player_lookup.py`,
-`test_projection_freshness.py`, `test_validation_reporting.py`). 66 tests total.
+`test_projection_freshness.py`, `test_validation_reporting.py`, `test_solver.py`). 71 tests total.
 
 Underlying CLIs take more flags than the Makefile uses:
 
@@ -216,6 +216,19 @@ Validated in `analysis/validate_goal_ridge.py`; guarded by
 Constants at the top encode the FPL rules (`SQUAD_LIMITS`, `XI_MIN`/`XI_MAX`,
 `MAX_PER_CLUB`, `HIT_COST`). Both entry points share `_prep()`, which time-decays the
 horizon at `0.86^n` so the solver doesn't over-commit to GW+5 projections.
+
+**Every solve goes through `_solve()`, and every integer read through `_val()`.**
+`_solve` tries CBC and falls back to HiGHS (`gapRel=0`) when CBC cannot execute:
+PuLP 3.x ships macOS CBC as x86_64 only, which fails with `OSError` errno 86 on
+Apple Silicon without Rosetta, and PuLP 4.0 stopped bundling CBC entirely. Don't
+trust `pulp.listSolvers(onlyAvailable=True)` — it reports CBC as available because
+the file exists. `_val` rounds; never read a variable with `int(var.value())`,
+because a solver may return a binary as 0.9999999 within tolerance and `int()`
+truncates it, which returned a 14-man squad with status `Optimal` and a −4 plan
+reporting zero hits. CBC returns exact integers in practice, so CI never showed it.
+`tests/test_solver.py` guards both. The same incident is why `requirements.txt`
+caps every major version: CI installs fresh on each run, so `pulp>=2.7` took
+PuLP 4.0 three hours after release and every daily run failed for 17 days.
 
 Two deliberate non-obvious defaults: `bench_weight=0.12` (bench counts at 12% of xP —
 setting it to 0 produces the fragile 4.0m non-playing bench) and `min_bench_start=0.30`
