@@ -609,6 +609,18 @@ def load_state(gw: int = 0) -> str:
     return _md(df) if not df.empty else "No saved state."
 
 
+def _last_synced_entry() -> int:
+    """The entry id the most recent API sync recorded in squad_state notes, so
+    the team id never has to be hand-edited into the MCP server config."""
+    import re
+    with _conn() as c:
+        rows = c.execute("SELECT notes FROM squad_state WHERE notes LIKE ? "
+                         "ORDER BY recorded_at DESC LIMIT 1",
+                         (entry.SYNC_PREFIX + ", entry %",)).fetchall()
+    m = re.match(re.escape(entry.SYNC_PREFIX) + r", entry (\d+)", rows[0][0]) if rows else None
+    return int(m.group(1)) if m else 0
+
+
 @mcp.tool()
 def sync_squad(entry_id: int = 0, save: bool = True) -> str:
     """
@@ -616,14 +628,17 @@ def sync_squad(entry_id: int = 0, save: bool = True) -> str:
     FPL API (no login) and save it as squad_state for the gameweek being planned.
     Call this at the start of every session instead of trusting a pasted squad.
 
-    entry_id: the FPL team id; 0 uses the FPLBRAIN_ENTRY_ID environment variable.
+    entry_id: the FPL team id; 0 uses FPLBRAIN_ENTRY_ID, else the entry the last
+      sync recorded — so after one sync, no argument is needed.
     Selling prices and free transfers are DERIVED from the transfer history
     (fplbrain/entry.py) and labelled so. Transfers already made for the next
     deadline are invisible until it passes.
     """
-    eid = entry_id or int(os.environ.get("FPLBRAIN_ENTRY_ID", "0") or 0)
+    eid = (entry_id or int(os.environ.get("FPLBRAIN_ENTRY_ID", "0") or 0)
+           or _last_synced_entry())
     if not eid:
-        return "No entry id: pass entry_id, or set FPLBRAIN_ENTRY_ID in the MCP server env."
+        return ("No entry id: pass entry_id once (later syncs remember it), or set "
+                "FPLBRAIN_ENTRY_ID in the MCP server env.")
     try:
         s = entry.entry_state(eid)
     except Exception as exc:  # network, 404, API shape change

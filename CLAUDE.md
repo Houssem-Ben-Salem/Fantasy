@@ -30,7 +30,7 @@ every test in it errors. `tests/test_sources_season_gating.py` is self-contained
 (monkeypatched HTTP, temp dirs) and runs anywhere, as do the other newer test files
 (`test_minutes_model.py`, `test_goal_ridge.py`, `test_chip_xi.py`, `test_player_lookup.py`,
 `test_projection_freshness.py`, `test_validation_reporting.py`, `test_solver.py`, `test_attack_fixture.py`, `test_transfer_pairs.py`, `test_entry.py`,
-`test_mcp_state.py`). 95 tests total.
+`test_mcp_state.py`). 96 tests total.
 
 Underlying CLIs take more flags than the Makefile uses:
 
@@ -46,7 +46,8 @@ Environment variables: `FPLBRAIN_DB` (default `data/fpl.db`), `FPLBRAIN_SEASON`
 (`2026-27`), `FPLBRAIN_CACHE` (`./data/cache`), `FPLBRAIN_ALLOW_LIVE` (`1`; set to `0`
 to skip live-API attempts entirely — faster in a sandbox where they will 403),
 `FPLBRAIN_ENTRY_ID` (the manager's FPL team id, used by `sync_squad` and `fplbrain.entry`;
-set it in the MCP server's env, never in the repo — the repo is public).
+set it in the MCP server's env, never in the repo — the repo is public; optional,
+because `sync_squad()` reuses the entry the last sync recorded in `squad_state`).
 `FPLBRAIN_SEASON` also drives `sources.CURRENT_SEASON`, which decides which season is
 allowed to use the live API; if it disagrees with `ingest --current`, the live path is
 skipped and everything falls back to the mirror, which is safe but staler.

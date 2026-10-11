@@ -162,3 +162,15 @@ def test_reported_gain_is_the_solver_gain_over_rolling(db, monkeypatch):
     monkeypatch.setattr(optimize, "transfer_plan", fake_plan)
     out = mcp_server.plan_transfers("")
     assert "+10.00" in out and "+30.00 xP" not in out.split("Gain over rolling")[0]
+
+
+def test_sync_squad_remembers_the_last_synced_entry(db, monkeypatch):
+    """With no id and no FPLBRAIN_ENTRY_ID, reuse the entry the last sync recorded
+    — so the MCP config never has to be edited by hand to carry a team id."""
+    from test_entry import _payloads
+    payloads = _payloads()
+    monkeypatch.setattr(entry, "_get", lambda path: payloads[path])
+    monkeypatch.delenv("FPLBRAIN_ENTRY_ID", raising=False)
+    mcp_server.sync_squad(entry_id=42)
+    out = mcp_server.sync_squad()
+    assert "(entry 42)" in out
