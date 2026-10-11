@@ -36,6 +36,7 @@ SQUAD_SIZE = 15
 XI_SIZE = 11
 HIT_COST = 4
 MAX_ROLLED_FT = 5
+_POS_ORDER = {"GK": 0, "DEF": 1, "MID": 2, "FWD": 3}
 
 
 @dataclass
@@ -295,8 +296,13 @@ def transfer_plan(proj: pd.DataFrame, current_squad: list[int], horizon: list[in
     df["bought"] = [_val(buy[i]) for i in idx]
     df["sold"] = [_val(sell[i]) for i in idx]
 
-    outs = df[df.sold == 1]
-    ins = df[df.bought == 1]
+    # Pair like for like. Position counts are fixed, so each position sells as
+    # many as it buys; pairing in element-id order instead crossed them in real
+    # data ("Palmer -> Calafiori"), with xp_gain computed across positions.
+    def _by_position(d: pd.DataFrame) -> pd.DataFrame:
+        return d.assign(_o=d["position"].map(_POS_ORDER)).sort_values(["_o", "horizon_xp"])
+    outs = _by_position(df[df.sold == 1])
+    ins = _by_position(df[df.bought == 1])
     transfers = [
         {"out": o.web_name, "out_element": int(o.element), "out_xp": round(o.horizon_xp, 2),
          "in": i_.web_name, "in_element": int(i_.element), "in_xp": round(i_.horizon_xp, 2),
