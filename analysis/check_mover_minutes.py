@@ -35,6 +35,16 @@ Decide at GW5, not before. If it holds, the fix belongs in the minutes model
 (discount prior-club usage by new-club squad depth); if it evaporates, this file
 records that it was tested rather than assumed.
 
+OUTCOME AT GW5 (11 Oct 2026): IT EVAPORATED. Pooled over GW1-5 this file said
+movers -0.119 vs stayers, CI [-0.225, -0.012] — but three of the four runs it
+pooled were the collapsed pre-fix minutes model (binary p_start), whose errors
+are not the fixed model's. Replaying the FIXED model (k=0.75) instead, among
+players predicted to start: 2025-26 GW7+ movers -0.060 vs stayers -0.073
+(movers better calibrated), 2026-27 GW2-6 -0.026 vs -0.035. No mover effect;
+no fix. See analysis/validate_team_minutes.py for the full minutes record.
+By default the file now scores only runs made after the minutes fix
+(2026-09-15T18:33Z); --include-pre-fix reproduces the pooled figure.
+
 METHOD
 ------
 For each completed gameweek, use the projection run that was created BEFORE that
@@ -45,6 +55,7 @@ community mirror has no 2026-27 merged_gw.csv yet.
 USAGE
     python analysis/check_mover_minutes.py            # all completed GWs
     python analysis/check_mover_minutes.py --gws 1 2  # specific ones
+    python analysis/check_mover_minutes.py --include-pre-fix   # the pooled figure
 """
 
 from __future__ import annotations
@@ -70,8 +81,13 @@ START_MIN = 60
 THRESHOLD = 0.70          # only players the model actually expected to start
 
 
+FIXED_MINUTES = "2026-09-15T18:33:17+00:00"   # minutes-model fix (author time, UTC)
+INCLUDE_PRE_FIX = "--include-pre-fix" in sys.argv
+
+
 def _pre_deadline_run(conn, gw: int) -> str | None:
-    """The newest projection run created before this gameweek's first kickoff."""
+    """The newest projection run created before this gameweek's first kickoff,
+    from the fixed minutes model unless --include-pre-fix."""
     ko = pd.read_sql(
         "SELECT MIN(kickoff_time) k FROM fixtures WHERE season=? AND gw=?",
         conn, params=(SEASON, gw)).iloc[0]["k"]
@@ -79,11 +95,11 @@ def _pre_deadline_run(conn, gw: int) -> str | None:
         return None
     r = pd.read_sql(
         """SELECT r.run_id FROM runs r
-           WHERE r.notes='projection' AND r.created_at < ?
+           WHERE r.notes='projection' AND r.created_at < ? AND r.created_at >= ?
              AND EXISTS (SELECT 1 FROM projections p
                          WHERE p.run_id=r.run_id AND p.gw=?)
            ORDER BY r.created_at DESC LIMIT 1""",
-        conn, params=(ko, gw))
+        conn, params=(ko, "" if INCLUDE_PRE_FIX else FIXED_MINUTES, gw))
     return None if r.empty else r.iloc[0]["run_id"]
 
 
@@ -123,6 +139,8 @@ def gameweek_frame(conn, gw: int) -> pd.DataFrame | None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--gws", nargs="*", type=int)
+    ap.add_argument("--include-pre-fix", action="store_true",
+                    help="pool runs from the collapsed pre-fix minutes model too")
     a = ap.parse_args()
 
     conn = sqlite3.connect(DB)

@@ -53,9 +53,23 @@ Pinnacle 1.52 vs ours 0.76). HUL's defence rating moved -0.305 -> -0.201 after o
 more match, the direction `check_promoted_prior.py` predicted. Hull have conceded 4
 against 7.40 xGA: the rating is fitted on goals, and goals flatter them.
 
-*Mover minutes* (`check_mover_minutes.py`, movers -0.119 vs stayers, CI excludes 0)
-pools four runs of which three are the collapsed pre-fix model. Re-measure on post-fix
-runs only before acting on it.
+*Minutes — four candidate fixes measured, none shipped* (full record in
+`analysis/validate_team_minutes.py`). The mover effect (`check_mover_minutes.py`,
+-0.119, CI excluding 0) came from pooling three collapsed pre-fix runs: on post-fix
+runs it is +0.003 (SE 0.076), and replaying the fixed model on 2025-26 movers are
+*better* calibrated than stayers. Short rest (<=3 days since the last league match)
+moves starts by one point. Over-confidence is real in 2025-26 (slope 0.77; the top
+bin predicts 0.957 and delivers 0.876) but the Murphy reliability term caps any
+recalibration at 1.7% of Brier and 2026-27's slope is 0.91-0.98 — the DefCon
+recalibration's failure mode. The one live candidate is making each team's start
+probabilities sum to the ~10.3 players who actually play 60+: positive in every test
+(+0.96% Brier on 2025-26, significant; +0.29% on 2026-27; +1.76% on the GW5
+production run) but the replay validates scaling DOWN while production — injury
+flags applied — would scale UP by up to 22%. Waiting on a written rule: ship after
+the production-regime interval excludes zero, or 6 gameweeks at P>=0.9.
+Rotation after European and cup midweeks is blocked on data: no reachable source has
+the current season's UCL/UEL/UECL/EFL Cup dates (openfootball stops at 2025-26
+Champions League; ClubElo's fixtures API is deactivated).
 
 *Infrastructure.* CI failed every daily run for 17 days: `pulp>=2.7` was unbounded and
 PuLP 4.0 (25 Sep) stopped bundling CBC. Locally, macOS 27 left PuLP's x86_64-only CBC
