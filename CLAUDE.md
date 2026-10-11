@@ -29,7 +29,7 @@ and refits the full model in a module-scoped fixture, so run `make ingest` first
 every test in it errors. `tests/test_sources_season_gating.py` is self-contained
 (monkeypatched HTTP, temp dirs) and runs anywhere, as do the other newer test files
 (`test_minutes_model.py`, `test_goal_ridge.py`, `test_chip_xi.py`, `test_player_lookup.py`,
-`test_projection_freshness.py`, `test_validation_reporting.py`, `test_solver.py`). 71 tests total.
+`test_projection_freshness.py`, `test_validation_reporting.py`, `test_solver.py`, `test_attack_fixture.py`). 74 tests total.
 
 Underlying CLIs take more flags than the Makefile uses:
 
@@ -210,6 +210,19 @@ rather than preventing it. Known cost, recorded in the constant's comment: this 
 lowers league-wide predicted goals as λ grows, so re-check level bias before raising it.
 Validated in `analysis/validate_goal_ridge.py`; guarded by
 `analysis/check_team_rating_bounds.py`.
+
+**Attacking returns are scaled by the fixture.** `exp_goals` and `exp_assists` are
+`xg90 * mins_frac * attack_multiplier(...) ** ATTACK_FIXTURE_ALPHA` (0.75), where the
+multiplier is the team's Dixon-Coles expected goals in this fixture over its average
+fixture — exactly 1 across a balanced schedule, so it moves goals between fixtures
+without creating any (alpha < 1 costs −0.39% through Jensen, measured). Until October
+2026 the module docstring claimed this while the code was fixture-blind: every
+attacker projected the same against every defence, while the same fit moved the
+other side's clean-sheet odds. Validated in `analysis/validate_attack_fixture.py`
+(scored on goals and assists given *actual* minutes, so minutes error cannot leak
+in); neither stage excludes zero once bootstrapped over fixtures, and the constant's
+comment says so. Setting it to 0 reproduces the old model exactly. Bonus is not
+scaled — that was not tested. `tests/test_attack_fixture.py` guards it.
 
 ## Optimiser conventions (`optimize.py`)
 

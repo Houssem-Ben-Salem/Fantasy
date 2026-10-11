@@ -117,6 +117,10 @@ def gameweek_rows(conn, season, hist, gw) -> pd.DataFrame:
     roster = pd.read_sql("SELECT short_name FROM teams WHERE season=?", conn,
                          params=(season,))["short_name"].tolist()
     rates = backtest._rates_as_of(conn, season, hist, gw)
+    # At GW1 there are no current-season rows, the concat includes an empty
+    # frame, and pandas types its columns object: values right, dtype wrong,
+    # and scipy's logpmf refuses it. backtest never calls this below GW8.
+    rates[["xg90", "xa90"]] = rates[["xg90", "xa90"]].astype(float)
     pg = pd.read_sql(
         """SELECT element, fixture_id, was_home, minutes, goals_scored g, assists ast
            FROM player_gw WHERE season=? AND gw=? AND minutes > 0""",

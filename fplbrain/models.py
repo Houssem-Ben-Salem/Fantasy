@@ -8,8 +8,9 @@ Four components feed one number (xP):
   2. MINUTES     P(start), P(60+), expected minutes from recent usage + status
   3. DEFCON      P(clearing the 10 CBIT / 12 CBIRT threshold), empirical-Bayes
                  shrunk toward positional priors
-  4. RETURNS     goal/assist rates from xG90/xA90, scaled by opponent strength,
-                 with penalty-taker uplift
+  4. RETURNS     goal/assist rates from xG90/xA90 with penalty-taker uplift,
+                 scaled by the fixture: the team's Dixon-Coles expected goals in
+                 this fixture relative to its average fixture, ** ATTACK_FIXTURE_ALPHA
 
 Then FPL 2026/27 scoring converts these into expected points, plus a variance
 estimate so captaincy can weigh ceiling against floor.
@@ -83,6 +84,33 @@ PRIOR_STRENGTH = 450.0  # minutes of "prior evidence"; ~5 full matches
 #     centred form avoided that but won fewer weeks. Re-check the level bias if
 #     lambda is ever raised.
 GOAL_RIDGE_LAMBDA = 2.0
+
+# Exponent on the fixture multiplier for attacking returns (see
+# DixonColes.attack_multiplier). 0 reproduces the old fixture-blind model.
+# Validated in analysis/validate_attack_fixture.py.
+#
+# Until October 2026 the docstring above claimed returns were "scaled by
+# opponent strength" while the code computed xg90 * mins_frac with no opponent,
+# so every attacker projected identically against every defence — while the
+# same fit was moving the other side's clean-sheet odds for that fixture.
+#
+# Scored on the attacking component alone: Poisson LL of actual goals and
+# assists given xg90 * ACTUAL minutes/90 * m**alpha, so minutes error cannot
+# leak in. CHOSEN ON 2025-26 GW8-38 (9348 player-games, 310 fixtures): peak at
+# 0.75, +13.71 LL vs 0, 21/31 weeks better; flat from 0.5 to 1.0. CONFIRMED on
+# 2026-27 GW1-5 frozen: +2.64 LL over 50 fixtures, 4/5 weeks better.
+#
+# HONEST CAVEAT: per fixture the gain replicates (+0.044, then +0.053), but
+# with a bootstrap over FIXTURES — teammates' goals in one match are not
+# independent — neither stage excludes zero: stage 1 [-2.17, +29.64]
+# P(>0)=0.955 (optimistic, alpha was chosen there), stage 2 [-4.58, +10.14]
+# P(>0)=0.76. Shipped on that plus coherence: the model already believed the
+# opponent sets the goals a team scores, for clean sheets; it now uses the same
+# number for the attackers on the other side. Bonus is NOT scaled — not tested.
+# Level cost: the raw multiplier averages to exactly 1 over a balanced schedule,
+# but alpha < 1 costs -0.39% of attacking output via Jensen's inequality on the
+# 2026-27 ratings (worst club -0.40%). Left in, because it is what was validated.
+ATTACK_FIXTURE_ALPHA = 0.75
 
 
 @dataclass
@@ -183,6 +211,23 @@ class DixonColes:
         ah, dh = self.attack.get(home, wa), self.defence.get(home, wd)
         aa, da = self.attack.get(away, wa), self.defence.get(away, wd)
         return float(np.exp(ah + da + self.home_adv)), float(np.exp(aa + dh))
+
+    def attack_multiplier(self, team: str, opponent: str, at_home: bool,
+                          roster: list[str]) -> float:
+        """
+        The team's expected goals in this fixture relative to its average
+        fixture against `roster` (the current season's clubs), home and away
+        equally weighted. Exactly 1 averaged over a balanced schedule, so it
+        moves goals between fixtures without changing a season's total.
+        Under exp(att + dfn_opp + home_adv*home) the team's own attack cancels.
+        """
+        wd = max(self.defence.values())          # expected_goals' unknown-team fallback
+        dfn = lambda t: self.defence.get(t, wd)  # noqa: E731
+        others = [o for o in roster if o != team] or [opponent]
+        mean_opp = float(np.mean([np.exp(dfn(o)) for o in others]))
+        venue = (1.0 + np.exp(self.home_adv)) / 2.0
+        this = np.exp(dfn(opponent) + (self.home_adv if at_home else 0.0))
+        return float(this / (mean_opp * venue))
 
     def clean_sheet_prob(self, team: str, opponent: str, at_home: bool) -> float:
         lh, la = self.expected_goals(team, opponent) if at_home else self.expected_goals(opponent, team)
@@ -504,6 +549,8 @@ def project_gameweek(conn: sqlite3.Connection, cur_season: str, gw: int,
            WHERE f.season=? AND f.gw=?""",
         conn, params=(cur_season, gw),
     )
+    roster = pd.read_sql("SELECT short_name FROM teams WHERE season=?", conn,
+                         params=(cur_season,))["short_name"].tolist()
     players = pd.read_sql(
         """SELECT p.element, p.code, p.web_name, p.position, p.team_id, p.now_cost,
                   p.selected_by_percent, t.short_name AS team
@@ -550,8 +597,10 @@ def project_gameweek(conn: sqlite3.Connection, cur_season: str, gw: int,
         gc = goal_model.goals_conceded_dist(team_name, r["opp"], bool(r["home"]))
 
         mins_frac = r["exp_minutes"] / 90.0
-        exp_goals = r["xg90"] * mins_frac
-        exp_assists = r["xa90"] * mins_frac
+        fixture = goal_model.attack_multiplier(
+            team_name, r["opp"], bool(r["home"]), roster) ** ATTACK_FIXTURE_ALPHA
+        exp_goals = r["xg90"] * mins_frac * fixture
+        exp_assists = r["xa90"] * mins_frac * fixture
         pos = r["position"]
 
         pts = 0.0
