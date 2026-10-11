@@ -431,7 +431,7 @@ def build_squad(budget: float = 100.0, gw_start: int = 0, n_gw: int = 6,
 @mcp.tool()
 def plan_transfers(squad_names: str = "", bank: float | None = None,
                    free_transfers: int | None = None,
-                   n_gw: int = 5, max_transfers: int = 3) -> str:
+                   n_gw: int = 5, max_transfers: int = 3, unavailable: str = "") -> str:
     """
     Given your current 15, decide transfers over the coming gameweeks.
 
@@ -442,10 +442,29 @@ def plan_transfers(squad_names: str = "", bank: float | None = None,
       real bank, derived selling prices and free transfers. Typing 15 names is the
       fallback, and hand-entered squads have been wrong before (a wrong backup
       keeper for five weeks). bank / free_transfers override the saved values.
+    unavailable: injury scenarios, e.g. "Gibbs-White:2, 229:5" — each player
+      (name or element id) projects zero for that many gameweeks from the next
+      one (no number = the whole horizon). Run one plan per scenario and present
+      the decision as "if X is out -> A; if fit -> B".
     """
     gw = _next_gw()
     proj = _projections(gw, n_gw)
     selling, note = None, ""
+    if unavailable.strip():
+        proj = proj.copy()
+        out = []
+        for item in unavailable.split(","):
+            who, _, weeks = item.strip().partition(":")
+            try:
+                el = _resolve_player(proj, who.strip())
+            except PlayerLookupError as e:
+                return f"**Could not resolve an unavailable player.**\n{e}"
+            n = int(weeks) if weeks.strip() else n_gw
+            hit = (proj.element == el) & proj.gw.between(gw, gw + n - 1)
+            proj.loc[hit, ["exp_points", "p_start"]] = [0.0, 0.0]
+            name = proj.loc[proj.element == el, "web_name"].iloc[0]
+            out.append(f"{name} ({el}) out GW{gw}-{gw + n - 1}")
+        note = "Scenario: " + "; ".join(out) + ".\n\n"
     if not squad_names.strip():
         st = _saved_squad()
         if st is None:
@@ -453,7 +472,7 @@ def plan_transfers(squad_names: str = "", bank: float | None = None,
         ids, selling = st["elements"], st["selling_prices"] or None
         bank = st["bank"] if bank is None else bank
         free_transfers = st["free_transfers"] if free_transfers is None else free_transfers
-        note = (f"Squad: saved state for GW{st['gw']}"
+        note += (f"Squad: saved state for GW{st['gw']}"
                 + ("" if st["gw"] == gw else f" — **planning GW{gw}; re-run sync_squad()**")
                 + ".\n\n")
     else:
@@ -607,6 +626,27 @@ def load_state(gw: int = 0) -> str:
         else:
             df = pd.read_sql("SELECT * FROM squad_state ORDER BY gw DESC LIMIT 1", c)
     return _md(df) if not df.empty else "No saved state."
+
+
+@mcp.tool()
+def note_decision(note: str, gw: int = 0) -> str:
+    """
+    Append a dated note to the saved squad state for a gameweek (default: the
+    next open one) without touching the squad, bank or transfers. Use it for
+    every judgement call that departs from the model, with the reason — those
+    notes are what the end-of-season review scores judgement by, and the next
+    sync_squad() keeps them.
+    """
+    gw = gw or _next_gw()
+    with _conn() as c:
+        row = c.execute("SELECT notes FROM squad_state WHERE gw=?", (gw,)).fetchone()
+        if row is None:
+            return f"No saved state for GW{gw}. Call sync_squad() first."
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        notes = ((row[0] or "").rstrip() + f"\n\n[{stamp}] {note.strip()}").strip()
+        c.execute("UPDATE squad_state SET notes=? WHERE gw=?", (notes, gw))
+        c.commit()
+    return f"Noted for GW{gw}."
 
 
 @mcp.tool()

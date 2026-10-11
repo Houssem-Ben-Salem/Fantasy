@@ -57,12 +57,13 @@ I'm an ML engineer. Talk to me at that level. No preamble, no restating my quest
 | `top_players(position, sort_by, max_price, limit)` | ranked shortlists by xP, value, or DefCon rate |
 | `player_detail(name)` | deep dive: projection, history, DefCon rate, set-piece duties |
 | `build_squad(budget, locked_players, banned_players)` | solve the 15 from scratch — pre-season and wildcards |
-| `plan_transfers()` | transfer decision for the synced squad; headline is the solver's gain over rolling |
+| `plan_transfers(unavailable)` | transfer decision for the synced squad; headline is the solver's gain over rolling; `unavailable="Name:2"` plans an injury scenario |
 | `chip_advice(gw)` | Bench Boost / Triple Captain / Free Hit valuation for the synced squad |
 | `fixture_outlook(n_gw)` | modelled fixture difficulty, better than official FDR |
 | `model_scorecard()` | how pre-deadline projections did vs a naive baseline, pooled over the season |
 | `run_sql(query)` | anything else — read-only, the schema is in the tool docstring |
-| `save_state` / `load_state` | annotate or read saved state; `sync_squad` writes the squad itself |
+| `note_decision(note)` | record a judgement call and its reason on the saved state |
+| `save_state` / `load_state` | write or read whole saved state; `sync_squad` writes the squad itself |
 
 Prefer `run_sql` over asking me for data. The database has three seasons of
 gameweek-level rows including tackles, recoveries, CBI, and defensive_contribution.
@@ -80,7 +81,10 @@ for a different result, and never assume which player was meant.
 
 ## Weekly workflow
 
-Run this whenever I say "weekly check-in" or name a gameweek.
+Run this whenever I say "weekly check-in" or name a gameweek. A
+`[fplbrain] GWn deadline brief` GitHub issue appears ~48h before each deadline
+and a final call ~12h before; in Claude Code the `/deadline-brief` skill runs
+the full version of these steps.
 
 1. `status()` → `refresh_data()` if stale → `sync_squad()` for my real squad.
    If the API is down, fall back to `load_state()` and say so.
@@ -98,8 +102,9 @@ Run this whenever I say "weekly check-in" or name a gameweek.
    transfers and selling prices. Planning starts at the next gameweek whose
    deadline has NOT passed, even while the current one is still being played.
 6. `chip_advice()` for the coming GW and flag anything on the horizon.
-7. Present the decision. Record judgement calls with `save_state()` notes;
-   the next `sync_squad()` keeps them and records what I actually did.
+7. Present the decision. Record every judgement call that departs from the
+   model with `note_decision()`, with its reason; the next `sync_squad()` keeps
+   the notes and records what I actually did.
 
 ## Chip policy
 

@@ -174,3 +174,43 @@ def test_sync_squad_remembers_the_last_synced_entry(db, monkeypatch):
     mcp_server.sync_squad(entry_id=42)
     out = mcp_server.sync_squad()
     assert "(entry 42)" in out
+
+
+# ------------------------------------------------------------ scenarios and decision notes
+
+def _proj_multi(*_a, **_k) -> pd.DataFrame:
+    """The synthetic squad over GW7-11."""
+    return pd.concat([_proj().assign(gw=g) for g in range(7, 12)], ignore_index=True)
+
+
+def test_plan_transfers_can_rule_a_player_out_for_some_weeks(db, monkeypatch):
+    """Injury scenarios ("if Gibbs-White misses two weeks") took a Python script
+    on 11 Oct 2026; the agent needs them as an argument."""
+    _save_state(db)
+    seen = {}
+    monkeypatch.setattr(mcp_server, "_projections", _proj_multi)
+    monkeypatch.setattr(mcp_server, "_next_gw", lambda: 7)
+
+    def fake_plan(proj, current_squad, horizon, bank, free_transfers, max_transfers=3, **kw):
+        seen.setdefault("proj", proj)
+        return optimize.OptimResult("Optimal", 0.0, pd.DataFrame(), pd.DataFrame(),
+                                    pd.DataFrame(), {}, {})
+
+    monkeypatch.setattr(optimize, "transfer_plan", fake_plan)
+    out = mcp_server.plan_transfers("", unavailable="101:2")
+    p = seen["proj"].set_index(["element", "gw"])
+    assert p.loc[(101, 7), "exp_points"] == 0 and p.loc[(101, 8), "p_start"] == 0
+    assert p.loc[(101, 9), "exp_points"] == 3.0            # back after two weeks
+    assert p.loc[(102, 7), "exp_points"] == 3.0            # nobody else touched
+    assert "101" in out or "P101" in out                   # the scenario is stated
+
+
+def test_a_decision_note_is_appended_without_touching_the_squad(db):
+    _save_state(db)
+    mcp_server.note_decision("JUDGEMENT: Saka captain over Fernandes on ownership.", gw=7)
+    mcp_server.note_decision("Wildcard held: only one player out beyond GW7.", gw=7)
+    with sqlite3.connect(db) as c:
+        squad, bank, notes = c.execute(
+            "SELECT squad, bank, notes FROM squad_state WHERE gw=7").fetchone()
+    assert len(json.loads(squad)) == 15 and bank == 0.7
+    assert "Saka captain" in notes and "Wildcard held" in notes

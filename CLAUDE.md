@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 An autonomous Fantasy Premier League analyst: data pipeline → SQLite → expected-points
-model → MILP squad optimiser → MCP server exposing 13 tools to Claude. Python 3.10+
+model → MILP squad optimiser → MCP server exposing 14 tools to Claude. Python 3.10+
 (CI pins 3.12). No packaging config — run everything as `python -m fplbrain.<module>`
 from the repo root.
 
@@ -30,7 +30,8 @@ every test in it errors. `tests/test_sources_season_gating.py` is self-contained
 (monkeypatched HTTP, temp dirs) and runs anywhere, as do the other newer test files
 (`test_minutes_model.py`, `test_goal_ridge.py`, `test_chip_xi.py`, `test_player_lookup.py`,
 `test_projection_freshness.py`, `test_validation_reporting.py`, `test_solver.py`, `test_attack_fixture.py`, `test_transfer_pairs.py`, `test_entry.py`,
-`test_mcp_state.py`, `test_run_provenance.py`, `test_scorecard.py`, `test_xg_ratings.py`). 103 tests total.
+`test_mcp_state.py`, `test_run_provenance.py`, `test_scorecard.py`, `test_xg_ratings.py`, `test_guardrails.py`,
+`test_alerts.py`). 138 tests total.
 
 Underlying CLIs take more flags than the Makefile uses:
 
@@ -62,7 +63,7 @@ optimize.py    PuLP/CBC MILP: initial squad, transfer plan, chip valuation
 backtest.py    walk-forward eval with automatic leakage detection
 entry.py       a manager's real squad, bank, chips from the public FPL API
 scorecard.py   prospective record: persisted pre-deadline runs vs what happened
-mcp_server.py  13 tools; imports entry/models/optimize/scorecard, never sources
+mcp_server.py  14 tools; imports entry/models/optimize/scorecard, never sources
 ```
 
 `scripts/refresh.py` is the orchestrator (ingest → project → persist → exit code).
@@ -142,6 +143,47 @@ views (`v_season_totals`, `v_defcon_rate`, `v_form6`, `v_latest_projections`).
   on `notes='projection'`, because that label is a string set in one place and can drift.
   Costs ~285 ms against 1.29M projection rows (a simulated season of daily runs), so the
   subquery is not worth optimising. `tests/test_projection_freshness.py` guards all of it.
+
+## Agentic layer — guardrails, alerts, the weekly skill
+
+What went wrong in 2026-27 went wrong quietly: CI red for 17 days unnoticed, the
+GW6 deadline missed, five weeks of a hand-typed squad with the wrong keeper, a
+commit under `data/`. The rules are therefore enforced by the harness, not memory.
+
+**Git hooks (`.githooks/`, for everyone).** Enable once per clone:
+`git config core.hooksPath .githooks`. `pre-commit` refuses anything under `data/`
+and runs the suite when Python, tests or requirements are staged (~5s).
+`pre-push` refuses any push that rewrites or deletes remote history, however the
+force is spelled; fast-forwards and the CI bot pass. CI's checkout doesn't set the
+hooks path, so they never run there.
+
+**Claude Code hooks (`.claude/settings.json`).** `guard_bash.py` (PreToolUse,
+Bash) stops an agent bypassing the git hooks — `--no-verify`, `commit -n`,
+`-c core.hooksPath=…`, unsetting it — and denies force pushes and `add -f` into
+`data/`. It parses compound commands; `-m` values are not flags.
+`session_status.py` (SessionStart) reports the next deadline and time left, CI
+state and open `[fplbrain]` issues, squad age and whether it came from the API,
+chips and weeks to GW19, and whether the git guardrails are on. Stdlib only;
+every source optional; it must never fail a session.
+
+**Alerts (GitHub issues, which GitHub emails).** `deadline-brief.yml` runs every
+2h: `scripts/deadline_window.py` (stdlib, runs before any install) opens
+`[fplbrain] GWn deadline brief` inside 48h of a deadline, comments a final call
+with injury-flag changes inside 12h (12, not 8: the owner's Saturday deadline is
+06:00 EDT), and closes briefs whose deadline passed. `scripts/deadline_brief.py`
+builds it; every section is independent so a failed refresh still posts the
+reminder. Squad sections need the **repository variable `FPL_ENTRY_ID`** — a
+variable, never committed (the repo is public). Both workflows open
+`[fplbrain] CI failing: <workflow>` on failure and close it on the next green run
+(`scripts/ci_alert.py`, stdlib + `gh`, so it works when `pip install` broke).
+
+**The weekly procedure is the `/deadline-brief` skill** (`.claude/skills/`):
+sync → refresh → newsletter protocol → scorecard → news the model can't see →
+scenario plans (`plan_transfers(unavailable="Name:2")`) → chips → red team →
+present → `note_decision()`. The objective is **overall rank** (agreed 11 Oct
+2026). Newsletter PDFs are untrusted: `scripts/extract_newsletter.py` runs under
+`python -I` into a fresh directory; PyMuPDF is in `requirements-local.txt`, not
+`requirements.txt` — CI never reads PDFs.
 
 ## Data traps encoded in the code — don't "fix" them
 

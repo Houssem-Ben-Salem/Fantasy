@@ -1,0 +1,2 @@
+# Local-only tools; CI does not need these. pip install -r requirements-local.txt
+pymupdf>=1.24,<2     # scripts/extract_newsletter.py — newsletter PDFs for /deadline-brief
